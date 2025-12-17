@@ -107,3 +107,17 @@ def get_strategy(name: str) -> Strategy:
         return STRATEGIES[name]()
     except KeyError:
         raise ValueError(f"unknown strategy {name!r}; choose from {sorted(STRATEGIES)}") from None
+
+
+def rule_based_order(symbol: str, sig: Signal, strategy: Strategy, held: int, equity: float, risk) -> "Order | None":
+    """Long-only policy: enter on score >= entry, exit fully on score <= exit. Sizing comes from the risk engine."""
+    from .risk import Order
+
+    f = sig.features
+    if held <= 0 and sig.score >= strategy.entry:
+        qty = risk.size(equity, f["close"], f["atr14"])
+        if qty > 0:
+            return Order(symbol, "buy", qty, f"score {sig.score:+.2f} >= entry {strategy.entry}: {sig.reason}")
+    elif held > 0 and sig.score <= strategy.exit:
+        return Order(symbol, "sell", held, f"score {sig.score:+.2f} <= exit {strategy.exit}: {sig.reason}")
+    return None
