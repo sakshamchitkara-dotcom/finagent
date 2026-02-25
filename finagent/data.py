@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +27,37 @@ class Bar:
 
 class DataUnavailable(RuntimeError):
     """Raised when a provider cannot return data (offline, blocked, unknown symbol)."""
+
+
+class BotChallenge(DataUnavailable):
+    """The server answered with an HTML page (captcha / JS bot challenge) instead of data."""
+
+
+# A descriptive, non-browser UA. Yahoo rate-limits (429) spoofed browser UAs harder than honest clients.
+USER_AGENT = "finagent/0.2 (+https://github.com/sakshamchitkara-dotcom/finagent)"
+
+
+def looks_like_html(text: str) -> bool:
+    head = text.lstrip()[:512].lower()
+    return head.startswith("<") or "<html" in head or "<!doctype" in head
+
+
+def http_get(url: str, source: str, timeout: float = 15.0) -> str:
+    """GET a data URL. Raises BotChallenge for HTML responses and DataUnavailable for every other failure."""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT,
+                                               "Accept": "application/json,text/csv;q=0.9,*/*;q=0.1"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            ctype = (getattr(resp, "headers", None) or {}).get("Content-Type", "") or ""
+            text = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        hint = " (rate limited, try again later)" if e.code == 429 else ""
+        raise DataUnavailable(f"{source}: HTTP {e.code}{hint}") from e
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise DataUnavailable(f"{source}: fetch failed: {e}") from e
+    if "html" in ctype.lower() or looks_like_html(text):
+        raise BotChallenge(f"{source}: got an HTML page (bot challenge?) instead of data: {text.strip()[:60]!r}")
+    return text
 
 
 class DataProvider(Protocol):
@@ -86,14 +119,9 @@ class StooqProvider:
 
     def history(self, symbol: str) -> list[Bar]:
         sym = symbol.lower() + ("" if "." in symbol else self.suffix)
-        req = urllib.request.Request(self.URL.format(sym=sym), headers={"User-Agent": "finagent/0.1"})
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                text = resp.read().decode("utf-8", "replace")
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise DataUnavailable(f"stooq fetch failed for {symbol}: {e}") from e
+        # Stooq now serves a JavaScript bot challenge to most non-browser clients; http_get flags it.
+        text = http_get(self.URL.format(sym=urllib.parse.quote(sym)), f"stooq {symbol}", self.timeout)
         if not text.lower().startswith("date,"):
-            # Stooq returns HTML (bot challenge) or "No data" instead of CSV in some cases.
             raise DataUnavailable(f"stooq returned non-CSV for {symbol}: {text[:60]!r}")
         bars = parse_csv(text)
         if not bars:
