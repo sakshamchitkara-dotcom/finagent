@@ -9,6 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
@@ -127,6 +128,49 @@ class StooqProvider:
         if not bars:
             raise DataUnavailable(f"stooq returned no bars for {symbol}")
         return bars
+
+
+def parse_yahoo_chart(text: str, symbol: str, adjust: bool = True) -> list[Bar]:
+    """Parse Yahoo's v8 chart JSON. With `adjust`, OHLC are scaled by adjclose/close (dividends + splits)."""
+    try:
+        chart = json.loads(text).get("chart") or {}
+    except (ValueError, AttributeError) as e:
+        raise DataUnavailable(f"yahoo {symbol}: response is not chart JSON") from e
+    if chart.get("error"):
+        err = chart["error"]
+        raise DataUnavailable(f"yahoo {symbol}: {err.get('description') or err.get('code') or err}")
+    try:
+        res = chart["result"][0]
+        stamps = res.get("timestamp") or []
+        q = res["indicators"]["quote"][0]
+        adj = (res["indicators"].get("adjclose") or [{}])[0].get("adjclose")
+        offset = int(res.get("meta", {}).get("gmtoffset") or 0)
+    except (KeyError, IndexError, TypeError) as e:
+        raise DataUnavailable(f"yahoo {symbol}: unexpected chart JSON layout") from e
+    by_date: dict[str, Bar] = {}
+    for i, t in enumerate(stamps):
+        o, h, lo, c = (q[k][i] for k in ("open", "high", "low", "close"))
+        if None in (o, h, lo, c) or c <= 0:
+            continue  # Yahoo pads holidays/halts with nulls
+        f = adj[i] / c if adjust and adj and adj[i] else 1.0
+        day = datetime.fromtimestamp(t + offset, tz=timezone.utc).date().isoformat()
+        by_date[day] = Bar(day, *(round(x * f, 6) for x in (o, h, lo, c)), float(q["volume"][i] or 0))  # last wins
+    if not by_date:
+        raise DataUnavailable(f"yahoo returned no bars for {symbol}")
+    return [by_date[d] for d in sorted(by_date)]
+
+
+class YahooProvider:
+    """Free, keyless daily bars from Yahoo Finance's chart JSON endpoint (dividend/split adjusted)."""
+
+    URL = "https://query2.finance.yahoo.com/v8/finance/chart/{sym}?range={range}&interval=1d&events=div%2Csplit"
+
+    def __init__(self, range: str = "10y", adjust: bool = True, timeout: float = 15.0):
+        self.range, self.adjust, self.timeout = range, adjust, timeout
+
+    def history(self, symbol: str) -> list[Bar]:
+        url = self.URL.format(sym=urllib.parse.quote(symbol.upper()), range=self.range)
+        return parse_yahoo_chart(http_get(url, f"yahoo {symbol}", self.timeout), symbol, self.adjust)
 
 
 class FallbackProvider:
