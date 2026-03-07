@@ -1,11 +1,12 @@
 import io
+import os
 import json
 import urllib.error
 
 import pytest
 
 from finagent import data
-from finagent.data import (BotChallenge, CSVProvider, DataUnavailable, FallbackProvider, StooqProvider,
+from finagent.data import (BotChallenge, CachedProvider, CSVProvider, DataUnavailable, FallbackProvider, StooqProvider,
                            YahooProvider, http_get, parse_csv, parse_yahoo_chart)
 
 CSV = "Date,Open,High,Low,Close,Volume\n2024-01-03,2,3,1,2.5,10\n2024-01-02,1,2,0.5,1.5,\nbad,x,y,z,w,1\n"
@@ -125,3 +126,32 @@ def test_yahoo_provider_fetches_and_detects_challenge(monkeypatch):
     monkeypatch.setattr(data.urllib.request, "urlopen", lambda req, timeout: _Resp(b"<html>consent</html>"))
     with pytest.raises(BotChallenge):
         YahooProvider().history("SPY")
+
+
+class _Counting:
+    def __init__(self, fail=False):
+        self.calls, self.fail = 0, fail
+
+    def history(self, symbol):
+        self.calls += 1
+        if self.fail:
+            raise DataUnavailable("offline")
+        return parse_csv(CSV)
+
+
+def test_cache_serves_fresh_then_stale_on_failure(tmp_path):
+    inner = _Counting()
+    c = CachedProvider(inner, tmp_path, max_age_hours=1)
+    assert c.history("BRK.B") == c.history("BRK.B") and inner.calls == 1  # second hit from disk
+    assert c.path("BRK.B").name == "_counting_BRK.B.csv" and "cache" in c.served_by["BRK.B"]
+    os.utime(c.path("BRK.B"), (0, 0))  # expire it
+    inner.fail = True
+    assert len(c.history("BRK.B")) == 2 and "STALE" in c.served_by["BRK.B"]
+    with pytest.raises(DataUnavailable):
+        c.history("NEVER_CACHED")
+
+
+def test_fallback_reports_both_failures():
+    fb = FallbackProvider(_Counting(fail=True), CSVProvider())
+    with pytest.raises(DataUnavailable, match="primary failed.*fallback failed"):
+        fb.history("SPY")

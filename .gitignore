@@ -12,3 +12,4 @@ dist/
 *.sqlite
 reports/
 state/
+data/cache/
