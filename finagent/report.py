@@ -5,7 +5,8 @@ from __future__ import annotations
 import html
 from pathlib import Path
 
-PCT = {"total_return", "cagr", "max_drawdown", "win_rate", "buy_hold_return"}
+PCT = {"total_return", "cagr", "max_drawdown", "win_rate", "buy_hold_return", "benchmark_total_return",
+       "benchmark_cagr", "benchmark_max_drawdown", "excess_return", "alpha"}
 
 
 def _fmt(k: str, v) -> str:
