@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import math
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from .broker import PaperBroker
@@ -96,6 +97,67 @@ def compute_metrics(equity: list[float], fills: list[dict], starting_cash: float
     }
 
 
+def round_trips(fills: list[dict]) -> list[dict]:
+    """Group fills into round trips: a trade opens when a position goes 0 -> long and closes when it is flat again.
+
+    P&L includes commissions on both legs. Positions still open at the end are returned with exit "open".
+    """
+    open_: dict[str, dict] = {}
+    trips: list[dict] = []
+    for f in fills:
+        s = f["symbol"]
+        t = open_.setdefault(s, {"symbol": s, "entry": f["ts"], "qty": 0, "held": 0, "cost": 0.0, "proceeds": 0.0,
+                                 "commission": 0.0, "exit": "open", "exit_reason": ""})
+        t["commission"] += f["commission"]
+        if f["side"] == "buy":
+            t["held"] += f["qty"]
+            t["qty"] += f["qty"]
+            t["cost"] += f["qty"] * f["price"]
+        else:
+            t["held"] -= f["qty"]
+            t["proceeds"] += f["qty"] * f["price"]
+            if t["held"] <= 0:
+                t["exit"], t["exit_reason"] = f["ts"], f.get("reason") or f.get("source") or ""
+                trips.append(open_.pop(s))
+    trips += open_.values()
+    out = []
+    for t in trips:
+        pnl = t["proceeds"] - t["cost"] - t["commission"]
+        closed = t["exit"] != "open"
+        out.append({
+            "symbol": t["symbol"], "entry": t["entry"], "exit": t["exit"], "qty": t["qty"],
+            "avg_entry": t["cost"] / t["qty"] if t["qty"] else 0.0,
+            "avg_exit": t["proceeds"] / (t["qty"] - t["held"]) if t["qty"] - t["held"] else 0.0,
+            "pnl": pnl if closed else None,
+            "return": pnl / t["cost"] if closed and t["cost"] else None,
+            "days_held": (date.fromisoformat(t["exit"][:10]) - date.fromisoformat(t["entry"][:10])).days
+            if closed else None,
+            "exit_reason": t["exit_reason"][:80],
+        })
+    return out
+
+
+def trade_stats(trips: list[dict]) -> dict:
+    """Summary of closed round trips: win rate, average win/loss, profit factor, expectancy, holding time."""
+    closed = [t for t in trips if t["pnl"] is not None]
+    wins = [t["pnl"] for t in closed if t["pnl"] > 0]
+    losses = [t["pnl"] for t in closed if t["pnl"] <= 0]
+    n = len(closed)
+    return {
+        "round_trips": n,
+        "open_trades": len(trips) - n,
+        "trade_win_rate": len(wins) / n if n else 0.0,
+        "avg_win": sum(wins) / len(wins) if wins else 0.0,
+        "avg_loss": sum(losses) / len(losses) if losses else 0.0,
+        "profit_factor": sum(wins) / -sum(losses) if losses and sum(losses) < 0 else float("inf") if wins else 0.0,
+        "expectancy": sum(t["pnl"] for t in closed) / n if n else 0.0,
+        "avg_trade_return": sum(t["return"] for t in closed) / n if n else 0.0,
+        "avg_days_held": sum(t["days_held"] for t in closed) / n if n else 0.0,
+        "best_trade": max((t["pnl"] for t in closed), default=0.0),
+        "worst_trade": min((t["pnl"] for t in closed), default=0.0),
+    }
+
+
 def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
                  risk_config: RiskConfig | None = None, cash: float = 100_000.0,
                  start: str | None = None, end: str | None = None, benchmark: str | None = None,
@@ -145,6 +207,7 @@ def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
 
     eq, fills = broker.rows("equity"), broker.rows("fills")
     metrics = compute_metrics([r["equity"] for r in eq], fills, cash)
+    metrics.update(trade_stats(round_trips(fills)))
     metrics["strategy"] = strategy.name
     metrics["period"] = f"{dates[first]} .. {dates[-1]}"
     p0 = {s: bars[s][first].open for s in symbols}
