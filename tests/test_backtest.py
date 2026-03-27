@@ -58,7 +58,8 @@ def test_html_report_is_self_contained():
     p = CSVProvider()
     r = run_backtest(p, ["SYN_INDEX"], get_strategy("momentum"), end="2020-06-30")
     page = render_html("t", r.equity, r.metrics, r.fills, r.journal)
-    assert "<svg" in page and "Paper trading only" in page
+    assert "<svg" in page and "Paper trading only" in page and "Round-trip trades" in page
+    assert 'class="bm"' not in page
     assert "http://" not in page and "https://" not in page
 
 
@@ -117,3 +118,10 @@ def test_trade_stats_profit_factor():
     st = trade_stats(round_trips(fills))
     assert st["avg_win"] == pytest.approx(28) and st["avg_loss"] == pytest.approx(-12)
     assert st["profit_factor"] == pytest.approx(28 / 12) and st["trade_win_rate"] == 0.5
+
+
+def test_html_report_overlays_benchmark():
+    p = CSVProvider()
+    r = run_backtest(p, ["SYN_TECH"], get_strategy("momentum"), end="2020-06-30", benchmark="SYN_INDEX")
+    page = render_html("t", r.equity, r.metrics, r.fills, benchmark=r.benchmark)
+    assert page.count('class="bm"') == 1 and "SYN_INDEX buy-and-hold" in page and "Per-symbol trade summary" in page
