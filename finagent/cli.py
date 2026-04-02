@@ -32,6 +32,10 @@ def _provider(args):
     return FallbackProvider(CachedProvider(LIVE[args.provider](), args.cache_dir, args.cache_hours), csv)
 
 
+def _risk_config(args) -> RiskConfig:
+    return RiskConfig(sizing=args.sizing, trailing_stop=args.trailing_stop)
+
+
 def _print_sources(provider) -> None:
     for s, src in getattr(provider, "served_by", {}).items():
         print(f"data {s}: {src}")
@@ -76,7 +80,7 @@ def cmd_backtest(args) -> int:
     provider = _provider(args)
     symbols = _symbols(args)
     try:
-        res = run_backtest(provider, symbols, get_strategy(args.strategy), RiskConfig(sizing=args.sizing),
+        res = run_backtest(provider, symbols, get_strategy(args.strategy), _risk_config(args),
                            cash=args.cash, start=args.start, end=args.end, benchmark=_benchmark(args))
     except DataUnavailable as e:
         print(f"error: {e}", file=sys.stderr)
@@ -105,7 +109,7 @@ def cmd_run(args) -> int:
     else:
         print("analyst: rule-based" + ("" if args.no_llm else " (no ANTHROPIC_API_KEY or anthropic SDK)"))
     agent = Agent(provider, PaperBroker(args.db, starting_cash=args.cash), symbols, get_strategy(args.strategy),
-                  RiskEngine(RiskConfig(sizing=args.sizing)), analyst,
+                  RiskEngine(_risk_config(args)), analyst,
                   log=lambda s: print(json.dumps(s, default=str)))
     try:
         if args.once:
@@ -168,6 +172,8 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("--strategy", default="combined", choices=sorted(STRATEGIES))
     common.add_argument("--sizing", default="atr", choices=["atr", "fixed"])
     common.add_argument("--cash", type=float, default=100_000.0)
+    common.add_argument("--trailing-stop", type=float, default=0.0, metavar="FRACTION",
+                        help="exit a long after it falls this fraction from its highest close (e.g. 0.1); 0 = off")
 
     p = argparse.ArgumentParser(prog="finagent", description=DISCLAIMER)
     sub = p.add_subparsers(dest="cmd", required=True)
