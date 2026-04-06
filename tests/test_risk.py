@@ -93,3 +93,20 @@ def test_trailing_stop_off_by_default():
     r = RiskEngine()
     r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 100.0}))
     assert r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 1.0})) == []
+
+
+def test_sector_cap_counts_every_name_in_the_sector():
+    cfg = RiskConfig(sectors={"A": "tech", "B": "tech", "C": "tech"}, max_sector_pct=0.4)
+    s = state(cash=70_000, positions={"B": 400, "C": 200}, prices={"A": 100.0, "B": 50.0, "C": 50.0})  # 30k tech
+    d = RiskEngine(cfg).check(Order("A", "buy", 1000), s)
+    assert d.approved and d.qty == 100 and any("sector 'tech'" in c for c in d.checks)  # 40k - 30k = 10k
+    full = state(cash=60_000, positions={"B": 800}, prices={"A": 100.0, "B": 50.0})
+    assert not RiskEngine(cfg).check(Order("A", "buy", 10), full).approved
+    other = RiskEngine(RiskConfig(sectors={"B": "tech"})).check(Order("A", "buy", 10), full)
+    assert other.approved  # unmapped symbols are not sector-capped
+
+
+def test_default_sectors_group_index_etfs():
+    from finagent.risk import DEFAULT_SECTORS
+
+    assert DEFAULT_SECTORS["SPY"] == DEFAULT_SECTORS["QQQ"] and DEFAULT_SECTORS["AAPL"] == DEFAULT_SECTORS["MSFT"]

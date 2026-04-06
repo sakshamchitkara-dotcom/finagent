@@ -33,7 +33,16 @@ def _provider(args):
 
 
 def _risk_config(args) -> RiskConfig:
-    return RiskConfig(sizing=args.sizing, trailing_stop=args.trailing_stop)
+    cfg = RiskConfig(sizing=args.sizing, trailing_stop=args.trailing_stop, max_sector_pct=args.max_sector_pct)
+    if args.sectors:
+        try:
+            extra = json.loads(Path(args.sectors).read_text())
+        except (OSError, ValueError) as e:
+            sys.exit(f"--sectors: cannot read {args.sectors}: {e}")
+        if not isinstance(extra, dict) or not all(isinstance(v, str) for v in extra.values()):
+            sys.exit('--sectors must be a JSON object like {"AAPL": "tech"}')
+        cfg.sectors.update({k.upper(): v for k, v in extra.items()})
+    return cfg
 
 
 def _print_sources(provider) -> None:
@@ -174,6 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("--cash", type=float, default=100_000.0)
     common.add_argument("--trailing-stop", type=float, default=0.0, metavar="FRACTION",
                         help="exit a long after it falls this fraction from its highest close (e.g. 0.1); 0 = off")
+    common.add_argument("--max-sector-pct", type=float, default=RiskConfig.max_sector_pct, metavar="FRACTION",
+                        help="cap on total long exposure per sector (default %(default)s)")
+    common.add_argument("--sectors", metavar="JSON", help='JSON file {"SYMBOL": "sector"} extending the built-in map')
 
     p = argparse.ArgumentParser(prog="finagent", description=DISCLAIMER)
     sub = p.add_subparsers(dest="cmd", required=True)

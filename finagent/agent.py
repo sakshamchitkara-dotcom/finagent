@@ -133,9 +133,10 @@ class Agent:
                 "positions": {s: {"qty": q, "weight": round(q * state.prices[s] / eq, 4)}
                               for s, q in state.positions.items() if q},
             },
-            "risk_limits": {k: v for k, v in vars(self.risk.config).items()},
+            "risk_limits": {k: v for k, v in vars(self.risk.config).items() if k != "sectors"},
             "symbols": {s: {**{k: (round(v, 4) if isinstance(v, float) else v) for k, v in f.items()},
-                            "strategy": self.strategy.name, "strategy_score": round(signals[s].score, 3)}
+                            "strategy": self.strategy.name, "strategy_score": round(signals[s].score, 3),
+                            "sector": self.risk.config.sectors.get(s)}
                         for s, f in feats.items()},
         }
 
