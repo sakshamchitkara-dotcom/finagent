@@ -178,8 +178,12 @@ def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
         day = dates[i]
         opens = {s: bars[s][i].open for s in symbols}
         # 1) execute yesterday's decisions at today's open, sells first to free cash
+        lb = risk.config.correlation_lookback  # correlations use closes up to yesterday only (no look-ahead)
+        rets = {s: daily_returns([b.close for b in bars[s][max(0, i - lb - 1):i]]) for s in symbols} \
+            if any(o.side == "buy" for o in pending) else {}
         for order in sorted(pending, key=lambda o: o.side != "sell"):
             state = broker.begin_day(day, opens)
+            state.returns = rets
             d = risk.check(order, state)
             outcome = "rejected"
             if d.approved:

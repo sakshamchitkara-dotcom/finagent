@@ -41,6 +41,7 @@ class PortfolioState:
     prices: dict[str, float]
     peak_equity: float
     day_start_equity: float
+    returns: dict[str, list[float]] = field(default_factory=dict)  # recent daily returns, for correlation checks
 
     @property
     def gross_exposure(self) -> float:
@@ -64,7 +65,22 @@ class RiskConfig:
     cost_buffer: float = 0.005        # headroom for slippage + commission when checking cash
     trailing_stop: float = 0.0        # exit a long after it falls this fraction from its high close; 0 = off
     max_sector_pct: float = 0.40      # total long exposure per sector, fraction of equity
+    max_correlated_pct: float = 0.40  # order symbol + held names correlated >= threshold, fraction of equity
+    correlation_threshold: float = 0.70
+    correlation_lookback: int = 60    # daily returns used for the correlation estimate
     sectors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_SECTORS))
+
+
+def correlation(a: list[float], b: list[float], min_obs: int = 20) -> float:
+    """Pearson correlation of the most recent overlapping observations; 0.0 with too little data."""
+    n = min(len(a), len(b))
+    if n < min_obs:
+        return 0.0
+    a, b = a[-n:], b[-n:]
+    ma, mb = sum(a) / n, sum(b) / n
+    cov = sum((x - ma) * (y - mb) for x, y in zip(a, b))
+    va, vb = sum((x - ma) ** 2 for x in a), sum((y - mb) ** 2 for y in b)
+    return cov / math.sqrt(va * vb) if va > 0 and vb > 0 else 0.0
 
 
 @dataclass(frozen=True)
@@ -177,6 +193,15 @@ class RiskEngine:
             in_sector = sum(q * state.prices[s] for s, q in state.positions.items()
                             if q > 0 and c.sectors.get(s) == sector)
             caps[f"sector '{sector}' exposure"] = (c.max_sector_pct * equity - in_sector) / price
+        mine = state.returns.get(order.symbol)
+        if mine:
+            peers = {s: correlation(mine, state.returns[s]) for s, q in state.positions.items()
+                     if q > 0 and s != order.symbol and s in state.returns}
+            peers = {s: r for s, r in peers.items() if r >= c.correlation_threshold}
+            if peers:
+                checks.append("correlated with " + ", ".join(f"{s} ({r:.2f})" for s, r in sorted(peers.items())))
+                cluster = held * price + sum(state.positions[s] * state.prices[s] for s in peers)
+                caps["correlated exposure"] = (c.max_correlated_pct * equity - cluster) / price
         for name, cap in caps.items():
             cap = max(0, math.floor(cap))
             if qty > cap:

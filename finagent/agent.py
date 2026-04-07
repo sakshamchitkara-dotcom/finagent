@@ -43,9 +43,14 @@ class Agent:
 
         # observe
         feats: dict[str, dict] = {}
+        rets: dict[str, list[float]] = {}
+        lb = self.risk.config.correlation_lookback
         for s in self.symbols:
             try:
-                f = features(self.provider.history(s))
+                hist = self.provider.history(s)
+                closes = [bar.close for bar in hist[-lb - 1:]]
+                rets[s] = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes)) if closes[i - 1] > 0]
+                f = features(hist)
             except DataUnavailable as e:
                 b.journal(now, s, "observe", "skip", 0, None, str(e), "no data")
                 continue
@@ -101,7 +106,9 @@ class Agent:
         # risk-check + execute, sells first to free cash
         results = []
         for o in sorted(orders, key=lambda o: o.side != "sell"):
-            d = self.risk.check(o, b.begin_day(as_of, prices))
+            st = b.begin_day(as_of, prices)
+            st.returns = rets
+            d = self.risk.check(o, st)
             outcome = "rejected: " + d.checks[-1] if not d.approved else ""
             if d.approved:
                 f = b.execute(d, prices[o.symbol], now)
