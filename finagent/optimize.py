@@ -10,8 +10,8 @@ import dataclasses
 import itertools
 from datetime import date, timedelta
 
-from .backtest import run_backtest
-from .data import Bar, DataProvider
+from .backtest import buy_and_hold, compute_metrics, run_backtest
+from .data import Bar, DataProvider, DataUnavailable
 from .risk import RiskConfig, correlation
 from .strategies import Strategy, get_strategy
 
@@ -120,3 +120,56 @@ def overfit_check(rows: list[dict]) -> dict:
         warnings.append(f"in-sample ranking does not carry over out-of-sample (rank correlation {rho:+.2f})")
     return {"best_is_sharpe": best["is_sharpe"], "best_oos_sharpe": best["oos_sharpe"],
             "oos_rank_of_is_best": f"{oos_rank}/{len(rows)}", "is_oos_rank_correlation": rho, "warnings": warnings}
+
+
+def walk_forward(provider: DataProvider, symbols: list[str], strategy: str, grid: dict[str, list[float]],
+                 train_days: int = 504, test_days: int = 126, start: str | None = None, end: str | None = None,
+                 base: RiskConfig | None = None, cash: float = 100_000.0,
+                 benchmark: str | None = None) -> tuple[list[dict], dict]:
+    """Rolling walk-forward: pick the best in-sample combination on each `train_days` window, then trade it on the
+    next `test_days` (never seen during selection). Test windows are stitched into one out-of-sample equity curve.
+
+    Returns (per-fold rows, summary). Each test window starts flat with indicators warmed up on prior bars.
+    """
+    if train_days < 20 or test_days < 20:
+        raise ValueError("train_days and test_days must be at least 20")
+    p, base = _Memo(provider), base or RiskConfig()
+    days = common_dates(p, symbols, start, end)
+    folds, curve, oos_days = [], [], []
+    for i in range(train_days, len(days) - 19, test_days):  # last window needs >= 20 days
+        train, test = days[i - train_days:i], days[i:i + test_days]
+        best, best_m = {}, None
+        for params in combos(grid) or [{}]:
+            strat, cfg = configure(strategy, params, base)
+            m = run_backtest(p, symbols, strat, cfg, cash, start=train[0], end=train[-1]).metrics
+            if best_m is None or m["sharpe"] > best_m["sharpe"]:
+                best, best_m = params, m
+        strat, cfg = configure(strategy, best, base)
+        res = run_backtest(p, symbols, strat, cfg, cash, start=test[0], end=test[-1])
+        scale = (curve[-1] if curve else cash) / cash  # compound the stitched curve across folds
+        curve += [r["equity"] * scale for r in res.equity]
+        oos_days += [r["ts"] for r in res.equity]
+        folds.append({"fold": len(folds) + 1, "train": f"{train[0]}..{train[-1]}", "test": f"{test[0]}..{test[-1]}",
+                      **best, **_pick("is", best_m), **_pick("oos", res.metrics)})
+    if not folds:
+        raise ValueError(f"need more than {train_days} + 20 common trading days for one walk-forward fold, "
+                         f"have {len(days)}")
+    oos = compute_metrics(curve, [], cash)
+    n = len(folds)
+    summary = {
+        "folds": n,
+        "oos_period": f"{oos_days[0]} .. {oos_days[-1]}",
+        "mean_is_sharpe": sum(f["is_sharpe"] for f in folds) / n,
+        "mean_oos_sharpe": sum(f["oos_sharpe"] for f in folds) / n,
+        "oos_folds_profitable": sum(f["oos_total_return"] > 0 for f in folds) / n,
+        **{f"oos_{k}": oos[k] for k in ("total_return", "cagr", "sharpe", "max_drawdown")},
+    }
+    if benchmark:
+        try:
+            bench = buy_and_hold(p.history(benchmark), oos_days, cash)
+            bm = compute_metrics(bench, [], cash)
+            summary.update({"benchmark": benchmark, "benchmark_total_return": bm["total_return"],
+                            "benchmark_sharpe": bm["sharpe"]})
+        except DataUnavailable as e:
+            summary["benchmark"] = f"{benchmark} unavailable: {e}"
+    return folds, summary

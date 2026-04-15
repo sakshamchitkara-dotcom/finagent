@@ -75,7 +75,7 @@ def _benchmark(args) -> str | None:
 def _print_metrics(m: dict) -> None:
     for k, v in m.items():
         if isinstance(v, float):
-            v = f"{v:.2%}" if k in PCT else f"{v:,.2f}"
+            v = f"{v:.2%}" if k in PCT or k.removeprefix("oos_") in PCT or k == "oos_folds_profitable" else f"{v:,.2f}"
         print(f"  {k:<24} {v}")
 
 
@@ -155,6 +155,29 @@ def cmd_sweep(args) -> int:
     _print_table(rows, list(grid) + [f"{p}_{k}" for p in ("is", "oos") for k in optimize.REPORTED])
     _print_overfit(optimize.overfit_check(rows))
     write_csv(rows, Path(args.out))
+    print(f"wrote {args.out}")
+    return 0
+
+
+def cmd_walkforward(args) -> int:
+    provider, symbols, grid = _provider(args), _symbols(args), _grid(args)
+    print(f"Walk-forward {args.strategy} | {', '.join(symbols)} | {len(optimize.combos(grid))} combinations | "
+          f"train {args.train_days}d, test {args.test_days}d")
+    try:
+        folds, summary = optimize.walk_forward(provider, symbols, args.strategy, grid, args.train_days,
+                                               args.test_days, args.start, args.end, _risk_config(args), args.cash,
+                                               _benchmark(args))
+    except (DataUnavailable, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    _print_sources(provider)
+    _print_table(folds, ["fold", "test", *grid, "is_sharpe", "oos_sharpe", "oos_total_return", "oos_max_drawdown",
+                         "oos_trades"])
+    print("stitched out-of-sample result (parameters re-chosen on each training window only):")
+    _print_metrics(summary)
+    if summary["mean_is_sharpe"] > 0 and summary["mean_oos_sharpe"] < 0.5 * summary["mean_is_sharpe"]:
+        print("WARNING: mean out-of-sample Sharpe is less than half the in-sample Sharpe: likely overfit")
+    write_csv(folds, Path(args.out))
     print(f"wrote {args.out}")
     return 0
 
@@ -257,6 +280,16 @@ def main(argv: list[str] | None = None) -> int:
     sw.add_argument("--end")
     sw.add_argument("--out", default="reports/sweep.csv")
     sw.set_defaults(fn=cmd_sweep)
+
+    wf = sub.add_parser("walkforward", parents=[common], help="rolling walk-forward out-of-sample evaluation")
+    wf.add_argument("--grid", action="append", metavar="NAME=V1,V2", help="as for sweep")
+    wf.add_argument("--train-days", type=int, default=504, help="in-sample window in trading days (default 504)")
+    wf.add_argument("--test-days", type=int, default=126, help="out-of-sample window in trading days (default 126)")
+    wf.add_argument("--start")
+    wf.add_argument("--end")
+    wf.add_argument("--benchmark", default="auto", help="as for backtest")
+    wf.add_argument("--out", default="reports/walkforward.csv")
+    wf.set_defaults(fn=cmd_walkforward)
 
     run = sub.add_parser("run", parents=[common], help="run the autonomous paper-trading loop")
     run.add_argument("--once", action="store_true", help="single tick, then exit")
