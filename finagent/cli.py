@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from .backtest import compute_metrics, round_trips, run_backtest, trade_stats, w
 from .broker import PaperBroker
 from .data import (SAMPLE_DIR, CachedProvider, CSVProvider, DataUnavailable, FallbackProvider, StooqProvider,
                    YahooProvider)
+from .notify import Notifier
 from .report import PCT, write_report
 from .risk import RiskConfig, RiskEngine
 from .strategies import STRATEGIES, get_strategy
@@ -191,9 +193,18 @@ def cmd_run(args) -> int:
         print(f"analyst: Claude ({args.model})")
     else:
         print("analyst: rule-based" + ("" if args.no_llm else " (no ANTHROPIC_API_KEY or anthropic SDK)"))
+    try:
+        notify = Notifier(args.webhook or os.environ.get("FINAGENT_WEBHOOK_URL"), only_orders=not args.notify_all)
+    except ValueError as e:
+        sys.exit(f"--webhook: {e}")
+
+    def log(summary: dict) -> None:
+        if args.json:
+            print(json.dumps(summary, default=str))
+        notify(summary)
+
     agent = Agent(provider, PaperBroker(args.db, starting_cash=args.cash), symbols, get_strategy(args.strategy),
-                  RiskEngine(_risk_config(args)), analyst,
-                  log=lambda s: print(json.dumps(s, default=str)))
+                  RiskEngine(_risk_config(args)), analyst, log=log)
     try:
         if args.once:
             agent.tick()
@@ -296,6 +307,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--interval", type=float, default=86_400, help="seconds between ticks")
     run.add_argument("--db", default=DEFAULT_DB)
     run.add_argument("--no-llm", action="store_true", help="force the rule-based policy")
+    run.add_argument("--webhook", metavar="URL",
+                     help="POST each decision as JSON (Slack/Discord compatible); default $FINAGENT_WEBHOOK_URL")
+    run.add_argument("--notify-all", action="store_true", help="also POST ticks with no orders")
+    run.add_argument("--json", action="store_true", help="also print the full tick summary as JSON")
     run.add_argument("--model", default=llm.MODEL)
     run.set_defaults(fn=cmd_run)
 
