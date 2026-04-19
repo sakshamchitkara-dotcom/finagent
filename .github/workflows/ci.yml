@@ -26,9 +26,13 @@ jobs:
           python scripts/gen_sample_data.py
           git diff --exit-code data/sample
       - run: pytest -q
-      - name: Smoke test CLI (no API key, paper only)
+      - name: Smoke test CLI (no API key, paper only, offline sample data)
         run: |
-          finagent backtest --out reports/ci
-          finagent run --once --db state/ci.db
+          finagent backtest --trailing-stop 0.1 --out reports/ci
+          test -s reports/ci/round_trips.csv
+          finagent sweep --symbols SYN_TECH SYN_UTIL --grid entry=0.3,0.4 --out reports/ci/sweep.csv
+          finagent walkforward --symbols SYN_TECH --grid entry=0.3,0.4 --train-days 252 --test-days 252 \
+            --out reports/ci/walkforward.csv
+          finagent run --once --db state/ci.db --trailing-stop 0.1
           finagent portfolio --db state/ci.db
           finagent report --db state/ci.db --out reports/ci/paper.html
