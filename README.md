@@ -1,12 +1,15 @@
 # finagent
 
-An autonomous **paper-trading** agent in pure Python: market data providers, technical
-indicators, pluggable strategies, a deterministic risk engine, a simulated broker with
-persisted state, a backtester with an HTML report, and an optional Claude analyst.
+An autonomous **paper-trading** agent in pure Python: market data providers (bundled sample data or
+free live daily bars from Yahoo Finance, cached on disk), technical indicators, pluggable strategies,
+a deterministic risk engine, a simulated broker with persisted state, a backtester with benchmark
+comparison and per-trade analytics, parameter sweeps and walk-forward testing, decision
+notifications, and an optional Claude analyst.
 
 > [!WARNING]
 > **Paper trading only. Not financial advice.** finagent has no brokerage integration and
-> no code path that places a real order. The bundled market data is **synthetic**. Backtest
+> no code path that places a real order. The bundled market data is **synthetic**; live data from
+> Yahoo is unofficial and may be delayed, adjusted or wrong. Backtest
 > results are not a prediction of future returns. Do not use this to make investment decisions.
 
 ## Quickstart
@@ -16,13 +19,20 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"          # core has zero runtime dependencies
 pytest -q
 
-finagent backtest                # all sample symbols, combined strategy
+finagent backtest                # all sample symbols, combined strategy, vs SYN_INDEX
 finagent run --once              # one autonomous tick against the paper account
 finagent portfolio               # positions, cash, P&L
 finagent report                  # HTML report of the paper account
+
+# real market data (free, no API key), benchmarked against SPY
+finagent backtest --provider yahoo --symbols SPY AAPL MSFT --start 2021-01-01 --trailing-stop 0.1
+finagent sweep       --provider yahoo --symbols SPY AAPL MSFT --grid entry=0.2,0.3,0.4 --grid trailing_stop=0,0.1
+finagent walkforward --provider yahoo --symbols SPY AAPL MSFT --grid entry=0.2,0.3,0.4 --test-days 252
+finagent run --once  --provider yahoo --symbols SPY AAPL MSFT --webhook https://hooks.slack.com/...
 ```
 
-Outputs go to `reports/` and paper state to `state/finagent.db` (both git-ignored).
+Outputs go to `reports/`, paper state to `state/finagent.db` and cached market data to `data/cache/`
+(all git-ignored).
 
 ## How it works
 
@@ -35,13 +45,15 @@ observe ──> analyze ──> decide ─────────────> 
 
 | Module | What it does |
 |---|---|
-| `data.py` | `DataProvider` protocol, `CSVProvider`, `StooqProvider` (live daily CSV via `urllib`), `FallbackProvider` |
+| `data.py` | `DataProvider` protocol, `CSVProvider`, `YahooProvider` (chart JSON via `urllib`), `StooqProvider`, `CachedProvider` (disk cache), `FallbackProvider`; explicit bot-challenge detection |
 | `indicators.py` | SMA, EMA, RSI (Wilder), MACD, ATR (Wilder), Bollinger bands |
 | `strategies.py` | `momentum`, `mean_reversion`, `combined`; each returns a score in [-1, 1] with a reason. Add one by implementing `signal()` and registering it in `STRATEGIES` |
 | `risk.py` | Position sizing and pre-trade checks (below) |
 | `broker.py` | Paper fills with slippage (5 bps) and commission ($0.005/share, $1 min); cash, positions, fills, equity and journal in sqlite |
-| `backtest.py` | Daily event loop: decide at close, fill at next open. CAGR, Sharpe, Sortino, max drawdown, win rate, turnover |
-| `report.py` | Self-contained HTML report with an inline SVG equity + drawdown chart |
+| `backtest.py` | Daily event loop: decide at close, fill at next open. CAGR, Sharpe, Sortino, max drawdown, win rate, turnover; buy-and-hold benchmark (excess return, beta, alpha, correlation); round-trip trade analytics |
+| `optimize.py` | Parameter sweep (in-sample vs out-of-sample) and rolling walk-forward evaluation with overfitting checks |
+| `report.py` | Self-contained HTML report: SVG equity + drawdown chart with benchmark overlay, metrics, per-symbol and per-trade tables |
+| `notify.py` | One-line decision summaries on stdout, optionally POSTed to a webhook |
 | `agent.py` | The autonomous loop and decision journal |
 | `llm.py` | Optional Claude analyst |
 
@@ -55,6 +67,9 @@ Every order, whether it comes from the rule-based policy or from Claude, passes 
 | Sizing | ATR-based: risk 1% of equity per 2×ATR move (or fixed-fractional 10% with `--sizing fixed`) |
 | Max single position | 20% of equity (buys are clipped) |
 | Max gross exposure | 95% of equity |
+| Sector exposure | 40% of equity per sector (built-in map of common US tickers, index ETFs share one bucket; extend with `--sectors map.json`, tune with `--max-sector-pct`) |
+| Correlated exposure | 40% of equity across the order symbol plus held names whose last 60 daily returns correlate ≥ 0.70 with it |
+| Trailing stop | off by default; `--trailing-stop 0.1` exits a long once it closes 10% below its highest close since entry. High-water marks persist across restarts |
 | Cash check | no margin; 0.5% headroom for costs |
 | Daily loss limit | no new buys after a 3% down day |
 | Max drawdown kill switch | at 20% from peak: latch, block buys, flatten all positions. The latch persists across restarts |
@@ -82,22 +97,67 @@ the rule-based policy and journals why. `--no-llm` forces rules.
 deterministically by `scripts/gen_sample_data.py` (seed 42, GBM with regime switching). CI checks that
 regenerating them gives byte-identical files.
 
-`--provider stooq` fetches free daily data from Stooq and falls back to `--data` CSVs when the fetch fails.
-Stooq sometimes serves a browser challenge page instead of CSV; finagent detects that and falls back.
+`--provider` works on `backtest`, `sweep`, `walkforward`, `run` and `portfolio`:
+
+| Provider | Source | Notes |
+|---|---|---|
+| `csv` (default) | `--data` directory of `SYMBOL.csv` | Offline. Used by tests and CI |
+| `yahoo` | Yahoo Finance v8 chart JSON, keyless | ~10 years of daily bars, OHLC scaled by adjusted close (dividends + splits). Sent with a descriptive `finagent/…` User-Agent: spoofed browser UAs get HTTP 429 |
+| `stooq` | Stooq CSV | Currently answers non-browser clients with a JavaScript bot-challenge page. finagent detects this (`BotChallenge`) and falls back instead of parsing HTML |
+
+Live providers need `--symbols`. Fetched bars are cached as CSV in `--cache-dir` (default `data/cache`) and
+reused for `--cache-hours` (default 12). If a refresh fails, a stale cached copy is used and labelled as
+such; if there is no cache either, finagent falls back to `--data` CSVs, and otherwise fails with both errors.
+Every command prints which source served each symbol (`live`, `cache`, `STALE cache`, or fallback).
 You can also point `--data` at your own directory of `SYMBOL.csv` files (`date,open,high,low,close,volume`).
+
+### Benchmark and trade analytics
+
+Backtests compare the strategy with buy-and-hold of `--benchmark` (default `auto`: SPY for live data,
+SYN_INDEX for the sample; `none` disables) over the same dates: benchmark return/CAGR/Sharpe/drawdown,
+excess return, beta, correlation and alpha. Fills are grouped into round trips (flat → long → flat) with
+commission-inclusive P&L, return, holding period and exit reason, summarised as win rate, average win/loss,
+profit factor and expectancy. Both appear in the HTML report and `round_trips.csv`.
+
+### Overfitting guards: sweep and walk-forward
+
+`finagent sweep` backtests every combination in `--grid` (strategy `entry`/`exit` or any numeric
+`RiskConfig` field, e.g. `trailing_stop`, `max_position_pct`) on an in-sample window and on the held-out
+period after `--split` (default 70% through the data). Rows are ranked by **in-sample** Sharpe, the only
+information you would have had. It reports where the in-sample winner ranks out-of-sample and the IS/OOS
+rank correlation, and warns when OOS Sharpe falls below half of IS or the ranking does not carry over.
+
+`finagent walkforward` repeats that on rolling windows: choose parameters on `--train-days` (504), trade
+them on the next unseen `--test-days` (126), roll forward, and stitch the test windows into one
+out-of-sample curve, compared with the benchmark over the same span. Only the stitched OOS numbers are a
+fair estimate; the in-sample Sharpe column is there to show how much of it was fitting.
+
+### Notifications
+
+`finagent run` prints one line per tick with the mode, equity, cash and each order's requested/approved
+quantity and outcome. `--webhook URL` (or `FINAGENT_WEBHOOK_URL`) also POSTs it as JSON
+`{"text", "content", "summary"}`, which Slack and Discord incoming webhooks accept. Ticks with no orders are
+not posted unless `--notify-all`. Webhook errors are printed and never stop the loop. `--json` prints the full
+tick summary.
 
 ## CLI
 
 ```
-finagent backtest [--strategy momentum|mean_reversion|combined] [--symbols ...] [--start D] [--end D]
-                  [--sizing atr|fixed] [--cash N] [--data DIR] [--out reports/backtest]
-finagent run      [--once | --interval SECONDS] [--db state/finagent.db] [--provider csv|stooq]
-                  [--no-llm] [--model claude-opus-5-5] [--strategy ...] [--symbols ...]
-finagent portfolio [--db ...]
-finagent report    [--db ...] [--out reports/paper_report.html]
+common:   [--provider csv|yahoo|stooq] [--data DIR] [--cache-dir data/cache] [--cache-hours 12]
+          [--symbols ...] [--strategy momentum|mean_reversion|combined] [--sizing atr|fixed] [--cash N]
+          [--trailing-stop F] [--max-sector-pct F] [--sectors map.json]
+
+finagent backtest    [--start D] [--end D] [--benchmark auto|SYMBOL|none] [--out reports/backtest]
+finagent sweep       [--grid NAME=V1,V2 ...] [--split D] [--start D] [--end D] [--out reports/sweep.csv]
+finagent walkforward [--grid NAME=V1,V2 ...] [--train-days 504] [--test-days 126] [--benchmark ...]
+                     [--out reports/walkforward.csv]
+finagent run         [--once | --interval SECONDS] [--db state/finagent.db] [--no-llm] [--model claude-opus-5-5]
+                     [--webhook URL] [--notify-all] [--json]
+finagent portfolio   [--db ...] [--provider ...]
+finagent report      [--db ...] [--out reports/paper_report.html]
 ```
 
-`backtest` writes `equity.csv`, `trades.csv`, `journal.csv` and `report.html`.
+`backtest` writes `equity.csv`, `trades.csv`, `round_trips.csv`, `journal.csv` and `report.html`.
 
 ## Example output (synthetic data)
 
@@ -113,17 +173,49 @@ Backtest combined | SYN_BANK, SYN_ENERGY, SYN_INDEX, SYN_TECH, SYN_UTIL
   win_rate         28.89%
   turnover         3.43
   buy_hold_return  -7.31%
+  benchmark_total_return   -10.67%   (SYN_INDEX buy-and-hold)
 ```
 
 The strategies do not make money on the synthetic random-walk data, and they should not be expected to.
 This run shows the kill switch working: drawdown reached 20%, the engine flattened the book, and it stopped
 trading. The strategies are simple examples for the framework, not a trading edge.
 
+## Example output (real data, fetched 2026-09-25)
+
+Observed output, abridged. It is a record of one run, not a forecast.
+
+```
+$ finagent backtest --provider yahoo --symbols SPY AAPL MSFT --start 2021-01-01 --trailing-stop 0.1 --cache-hours 0
+data SPY: yahoo (live, cached 2513 bars)
+Backtest combined | SPY, AAPL, MSFT
+  total_return             10.80%      benchmark                SPY buy-and-hold
+  cagr                     1.81%       benchmark_total_return   120.69%
+  sharpe                   0.31        benchmark_sharpe         0.92
+  max_drawdown             14.39%      benchmark_max_drawdown   24.50%
+  round_trips              61          beta                     0.22
+  profit_factor            1.27        alpha                    -1.30%
+
+$ finagent walkforward --provider yahoo --symbols SPY AAPL MSFT --grid entry=0.2,0.3,0.4 --grid trailing_stop=0,0.1 --test-days 252
+  folds 8 | oos_period 2018-09-26 .. 2026-09-24
+  mean_is_sharpe 1.24 | mean_oos_sharpe 0.84 | oos_folds_profitable 75.00%
+  oos_total_return 50.93% | oos_sharpe 0.82 | oos_max_drawdown 11.72%
+  benchmark SPY: total_return 197.25% | sharpe 0.80
+
+$ finagent run --once --provider yahoo --symbols SPY AAPL MSFT --trailing-stop 0.1
+[finagent paper] 2026-09-24 mode=rules equity=99,978.12 cash=60,212.16 | BUY SPY 26/75: filled buy 26 @ 767.56 (paper); BUY AAPL 59/71: filled buy 59 @ 336.09 (paper)
+```
+
+On real large-cap data, the example strategies have lower drawdowns than SPY but trail buy-and-hold by a wide
+margin. In-sample Sharpe overstates what the walk-forward delivers out-of-sample.
+
 ## Limitations
 
 - Long-only, daily bars, a single currency, no corporate actions, no intraday risk.
 - Fills are simulated at the next open (backtest) or the last close (live loop) plus fixed slippage. There is no order book or partial-fill model.
 - Running `run --once` again on the same static CSV data re-evaluates the same bar.
+- During market hours Yahoo's last bar is today's partial session; the live loop treats it as the latest close.
+- Trailing stops and correlations use daily closes, not intraday highs/lows.
+- Yahoo's endpoint is unofficial and rate limited; the cache keeps repeated runs to one request per symbol.
 
 ## License
 
