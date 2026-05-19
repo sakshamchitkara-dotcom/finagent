@@ -31,7 +31,13 @@ def _provider(args):
     csv = CSVProvider(args.data)
     if args.provider == "csv":
         return csv
-    return FallbackProvider(CachedProvider(LIVE[args.provider](), args.cache_dir, args.cache_hours), csv)
+    if args.provider == "yahoo":
+        live = YahooProvider(include_partial=args.include_partial)
+    else:
+        live = LIVE[args.provider]()
+    # An in-progress bar changes every minute, so --include-partial always refetches (the cache stays a fallback).
+    hours = 0.0 if args.include_partial else args.cache_hours
+    return FallbackProvider(CachedProvider(live, args.cache_dir, hours), csv)
 
 
 def _risk_config(args) -> RiskConfig:
@@ -260,6 +266,9 @@ def main(argv: list[str] | None = None) -> int:
     data.add_argument("--data", default=str(SAMPLE_DIR), help="directory of <SYMBOL>.csv files")
     data.add_argument("--cache-dir", default="data/cache", help="where live bars are cached")
     data.add_argument("--cache-hours", type=float, default=12.0, help="refetch cached bars older than this")
+    data.add_argument("--include-partial", action="store_true",
+                      help="yahoo: keep today's in-progress bar during market hours (its close is the latest "
+                           "trade, not a daily close); disables cache reuse. Default: drop it")
 
     common = argparse.ArgumentParser(add_help=False, parents=[data])
     common.add_argument("--symbols", nargs="+", help="default: every CSV in --data")
