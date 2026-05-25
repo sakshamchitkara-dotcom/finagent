@@ -212,7 +212,8 @@ margin. In-sample Sharpe overstates what the walk-forward delivers out-of-sample
 
 - Long-only, daily bars, a single currency, no corporate actions, no intraday risk.
 - Fills are simulated at the next open (backtest) or the last close (live loop) plus fixed slippage. There is no order book or partial-fill model.
-- Running `run --once` again on the same static CSV data re-evaluates the same bar.
+- A tick whose latest bar and prices match the previous tick is a no-op (`mode=no new bar`), so re-running
+  `run --once` on static data no longer re-trades the same bar. It is journalled as a skip.
 - During market hours Yahoo's last bar is today's unfinished session. It is dropped by default (detected from Yahoo's
   own session clock, `currentTradingPeriod` vs `regularMarketTime`); `--include-partial` keeps it for intraday ticks,
   treating the latest trade as the close, and refetches on every tick instead of reusing the cache.
