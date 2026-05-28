@@ -65,3 +65,10 @@ def test_walk_forward_folds_never_overlap_their_training_window():
     assert summary["oos_period"].startswith(folds[0]["test"][:10]) and summary["benchmark"] == "SYN_INDEX"
     with pytest.raises(ValueError, match="walk-forward fold"):
         optimize.walk_forward(CSVProvider(), ["SYN_TECH"], "momentum", {}, train_days=2000)
+
+
+def test_ranks_average_ties():
+    assert optimize._ranks([0.0, 1.0, 0.0, 0.0, 2.0]) == [1.0, 3.0, 1.0, 1.0, 4.0]
+    # all-tied IS Sharpes (nothing traded) carry no ranking information: correlation 0, not an artefact
+    rows = [{"is_sharpe": 0.0, "oos_sharpe": s} for s in (0.3, 0.2, 0.1)]
+    assert optimize.overfit_check(rows)["is_oos_rank_correlation"] == 0.0
