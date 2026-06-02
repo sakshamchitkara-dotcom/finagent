@@ -84,7 +84,7 @@ class Agent:
 
         # decide
         mode, orders, notes = "rules", [], {}
-        stops = self.risk.trailing_stop_orders(state)
+        stops = self.risk.exit_orders(state)
         if self.risk.update(state):
             mode, orders = "kill-switch", self.risk.liquidation_orders(state)
         elif self.analyst is not None:

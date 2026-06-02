@@ -82,19 +82,19 @@ def test_liquidation_orders_after_kill():
 
 def test_trailing_stop_ratchets_and_fires():
     r = RiskEngine(RiskConfig(trailing_stop=0.10))
-    assert r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 100.0})) == []
-    assert r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 120.0})) == []  # new high 120
-    assert r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 109.0})) == []  # -9.2%
-    [o] = r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 108.0}))        # -10%
+    assert r.exit_orders(state(positions={"A": 10}, prices={"A": 100.0})) == []
+    assert r.exit_orders(state(positions={"A": 10}, prices={"A": 120.0})) == []  # new high 120
+    assert r.exit_orders(state(positions={"A": 10}, prices={"A": 109.0})) == []  # -9.2%
+    [o] = r.exit_orders(state(positions={"A": 10}, prices={"A": 108.0}))        # -10%
     assert (o.symbol, o.side, o.qty, o.source) == ("A", "sell", 10, "risk") and "trailing stop" in o.reason
-    r.trailing_stop_orders(state(positions={}, prices={"A": 108.0}))
+    r.exit_orders(state(positions={}, prices={"A": 108.0}))
     assert r.stop_highs == {}  # forgotten once flat, so a re-entry starts a fresh high
 
 
 def test_trailing_stop_off_by_default():
     r = RiskEngine()
-    r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 100.0}))
-    assert r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 1.0})) == []
+    r.exit_orders(state(positions={"A": 10}, prices={"A": 100.0}))
+    assert r.exit_orders(state(positions={"A": 10}, prices={"A": 1.0})) == []
 
 
 def test_sector_cap_counts_every_name_in_the_sector():
@@ -133,3 +133,42 @@ def test_correlated_exposure_cap():
     assert d.qty == 100 and any("correlated with B (1.00)" in c for c in d.checks)  # 30k - 20k
     s.returns["B"] = noise
     assert RiskEngine(cfg).check(Order("A", "buy", 1000), s).qty == 200  # uncorrelated: only the 20% cap
+
+
+def test_stop_loss_and_take_profit_use_average_entry():
+    r = RiskEngine(RiskConfig(stop_loss=0.08, take_profit=0.25))
+
+    def at(px):
+        s = state(positions={"A": 10}, prices={"A": px})
+        s.costs = {"A": 100.0}
+        return r.exit_orders(s)
+
+    assert at(93.0) == [] and at(124.0) == []
+    [o] = at(92.0)
+    assert (o.symbol, o.side, o.qty, o.source) == ("A", "sell", 10, "risk") and o.reason.startswith("stop loss")
+    [o] = at(125.0)
+    assert o.reason.startswith("take profit") and "25.0% above entry 100.00" in o.reason
+    no_cost = state(positions={"A": 10}, prices={"A": 1.0})
+    assert r.exit_orders(no_cost) == []  # unknown entry price: no stop/target
+
+
+def test_one_exit_per_symbol_when_stops_overlap():
+    r = RiskEngine(RiskConfig(stop_loss=0.05, trailing_stop=0.05))
+    s = state(positions={"A": 10}, prices={"A": 120.0})
+    s.costs = {"A": 120.0}
+    r.exit_orders(s)
+    s.prices["A"] = 100.0  # both the stop-loss and the trailing stop are hit
+    [o] = r.exit_orders(s)
+    assert o.reason.startswith("stop loss")
+
+
+def test_backtest_honours_stop_loss_and_take_profit():
+    from finagent.backtest import run_backtest
+    from finagent.data import CSVProvider
+    from finagent.strategies import get_strategy
+
+    p = CSVProvider()
+    r = run_backtest(p, p.symbols(), get_strategy("momentum"), RiskConfig(stop_loss=0.03, take_profit=0.05),
+                     end="2021-12-31")
+    reasons = {f["reason"].split(":")[0] for f in r.fills if f["source"] == "risk"}
+    assert {"stop loss", "take profit"} <= reasons

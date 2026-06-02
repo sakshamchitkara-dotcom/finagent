@@ -70,6 +70,7 @@ Every order, whether it comes from the rule-based policy or from Claude, passes 
 | Sector exposure | 40% of equity per sector (built-in map of common US tickers, index ETFs share one bucket; extend with `--sectors map.json`, tune with `--max-sector-pct`) |
 | Correlated exposure | 40% of equity across the order symbol plus held names whose last 60 daily returns correlate ≥ 0.70 with it |
 | Trailing stop | off by default; `--trailing-stop 0.1` exits a long once it closes 10% below its highest close since entry. High-water marks persist across restarts |
+| Stop-loss / take-profit | off by default; `--stop-loss 0.08` / `--take-profit 0.25` exit a long once it closes that fraction below / above its average entry price. Checked before the trailing stop; one exit per symbol |
 | Cash check | no margin; 0.5% headroom for costs |
 | Daily loss limit | no new buys after a 3% down day |
 | Max drawdown kill switch | at 20% from peak: latch, block buys, flatten all positions. The latch persists across restarts |
@@ -145,7 +146,7 @@ tick summary.
 ```
 common:   [--provider csv|yahoo|stooq] [--data DIR] [--cache-dir data/cache] [--cache-hours 12]
           [--symbols ...] [--strategy momentum|mean_reversion|combined] [--sizing atr|fixed] [--cash N]
-          [--trailing-stop F] [--max-sector-pct F] [--sectors map.json]
+          [--trailing-stop F] [--stop-loss F] [--take-profit F] [--max-sector-pct F] [--sectors map.json]
 
 finagent backtest    [--start D] [--end D] [--benchmark auto|SYMBOL|none] [--out reports/backtest]
 finagent sweep       [--grid NAME=V1,V2 ...] [--split D] [--start D] [--end D] [--out reports/sweep.csv]

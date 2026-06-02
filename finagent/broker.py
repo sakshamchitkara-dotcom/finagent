@@ -84,8 +84,9 @@ class PaperBroker:
         peak = max(self.get_meta("peak_equity") or eq, eq)
         self.set_meta("peak_equity", peak)
         self.conn.commit()
-        return PortfolioState(self.cash, {s: q for s, (q, _) in self.positions().items()}, dict(prices),
-                              peak, self.get_meta("day_start_equity"))
+        pos = self.positions()
+        return PortfolioState(self.cash, {s: q for s, (q, _) in pos.items()}, dict(prices),
+                              peak, self.get_meta("day_start_equity"), costs={s: a for s, (_, a) in pos.items()})
 
     # --- execution ----------------------------------------------------------------------
     def execute(self, decision: RiskDecision, ref_price: float, ts: str) -> Fill:
