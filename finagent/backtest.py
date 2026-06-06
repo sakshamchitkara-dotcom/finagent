@@ -23,6 +23,7 @@ class BacktestResult:
     journal: list[dict]
     metrics: dict
     benchmark: list[dict] | None = None  # {"ts", "equity"} buy-and-hold curve on the same dates
+    positions: list[dict] | None = None  # open positions at the end, with their exit levels (RiskEngine.levels)
 
 
 def daily_returns(values: list[float]) -> list[float]:
@@ -213,6 +214,7 @@ def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
                 if order:
                     pending.append(order)
 
+    positions = risk.levels(broker.begin_day(dates[-1], {s: bars[s][-1].close for s in symbols}))
     eq, fills = broker.rows("equity"), broker.rows("fills")
     metrics = compute_metrics([r["equity"] for r in eq], fills, cash)
     metrics.update(trade_stats(round_trips(fills)))
@@ -235,7 +237,7 @@ def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
                 metrics[f"benchmark_{k}"] = bm[k]
             metrics.update(relative_metrics([r["equity"] for r in eq], curve, cash))
             bench_rows = [{"ts": d, "equity": v} for d, v in zip(days, curve)]
-    return BacktestResult(eq, fills, broker.rows("journal"), metrics, bench_rows)
+    return BacktestResult(eq, fills, broker.rows("journal"), metrics, bench_rows, positions)
 
 
 def write_csv(rows: list[dict], path: Path) -> None:

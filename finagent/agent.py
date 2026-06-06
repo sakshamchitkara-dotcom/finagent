@@ -136,6 +136,9 @@ class Agent:
         held = b.positions()
         b.set_meta("stop_highs", {s: h for s, h in self.risk.stop_highs.items() if s in held})
         b.set_meta("last_bar", seen)
+        c = self.risk.config  # so `portfolio` and `report` can show the exit levels this loop is enforcing
+        b.set_meta("exit_config", {"stop_loss": c.stop_loss, "take_profit": c.take_profit,
+                                   "trailing_stop": c.trailing_stop})
         final_equity = b.mark(as_of, prices)
         summary = {"ts": now, "as_of": as_of, "mode": mode, "orders": results,
                    "equity": round(final_equity, 2), "cash": round(b.cash, 2), "killed": self.risk.killed}

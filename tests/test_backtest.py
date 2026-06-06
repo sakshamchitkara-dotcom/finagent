@@ -132,3 +132,14 @@ def test_trailing_stop_exits_in_backtest():
     r = run_backtest(p, p.symbols(), get_strategy("momentum"), RiskConfig(trailing_stop=0.05), end="2021-12-31")
     stops = [f for f in r.fills if f["reason"].startswith("trailing stop")]
     assert stops and all(f["side"] == "sell" and f["source"] == "risk" for f in stops)
+
+
+def test_backtest_reports_open_positions_with_exit_levels():
+    p = CSVProvider()
+    r = run_backtest(p, ["SYN_TECH", "SYN_UTIL"], get_strategy("momentum"),
+                     RiskConfig(stop_loss=0.1, trailing_stop=0.15), end="2021-06-30")
+    for row in r.positions:
+        assert row["stop_loss"] == pytest.approx(row["avg_entry"] * 0.9) and row["take_profit"] is None
+        assert row["trailing_stop"] >= row["last"] * 0.85
+    page = render_html("t", r.equity, r.metrics, r.fills, positions=r.positions)
+    assert "Open positions and exit levels" in page
