@@ -48,6 +48,8 @@ def features(bars: Sequence[Bar]) -> Optional[dict]:
         "bb_lower": dn[-1],
         "pct_b": (c[-1] - dn[-1]) / width if width > 0 else 0.5,
         "ret_20d": c[-1] / c[-21] - 1,
+        "high_55": max(h[-56:-1]),  # Donchian channel of the PRIOR bars (today excluded, so a close can break it)
+        "low_20": min(lo[-21:-1]),
     }
 
 
@@ -87,6 +89,24 @@ class MeanReversion:
         return Signal(score, f"mean_reversion: rsi={f['rsi14']:.1f}, %b={f['pct_b']:.2f}", f)
 
 
+class Breakout:
+    """Donchian channel breakout (Turtle-style trend following): enter when the close breaks above the prior 55-day
+    high, exit when it breaks below the prior 20-day low. In between the score only leans with the SMA20/50 trend,
+    which never reaches the thresholds, so the position is held until the exit channel breaks."""
+    name, entry, exit = "breakout", 0.9, -0.9
+
+    def signal(self, f: dict) -> Signal:
+        c, hi, lo = f["close"], f["high_55"], f["low_20"]
+        if c > hi:
+            score, why = 1.0, f"close {c:.2f} broke the 55-day high {hi:.2f}"
+        elif c < lo:
+            score, why = -1.0, f"close {c:.2f} broke the 20-day low {lo:.2f}"
+        else:
+            score = 0.3 if f["sma20"] > f["sma50"] else -0.3
+            why = f"inside channel [{lo:.2f}, {hi:.2f}], sma20{'>' if score > 0 else '<'}sma50"
+        return Signal(score, f"breakout: {why}", f)
+
+
 class Combined:
     """Weighted blend of momentum and mean reversion."""
     name, entry, exit = "combined", 0.3, -0.15
@@ -100,7 +120,7 @@ class Combined:
         return Signal(score, "combined[" + "; ".join(f"{s.reason} ({s.score:+.2f})" for s, _ in sigs) + "]", f)
 
 
-STRATEGIES = {"momentum": Momentum, "mean_reversion": MeanReversion, "combined": Combined}
+STRATEGIES = {"momentum": Momentum, "mean_reversion": MeanReversion, "combined": Combined, "breakout": Breakout}
 
 
 def get_strategy(name: str) -> Strategy:

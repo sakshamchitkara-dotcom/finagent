@@ -47,7 +47,7 @@ observe ──> analyze ──> decide ─────────────> 
 |---|---|
 | `data.py` | `DataProvider` protocol, `CSVProvider`, `YahooProvider` (chart JSON via `urllib`), `StooqProvider`, `CachedProvider` (disk cache), `FallbackProvider`; explicit bot-challenge detection |
 | `indicators.py` | SMA, EMA, RSI (Wilder), MACD, ATR (Wilder), Bollinger bands |
-| `strategies.py` | `momentum`, `mean_reversion`, `combined`; each returns a score in [-1, 1] with a reason. Add one by implementing `signal()` and registering it in `STRATEGIES` |
+| `strategies.py` | `momentum`, `mean_reversion`, `combined`, `breakout` (Donchian: enter on a close above the prior 55-day high, exit below the prior 20-day low); each returns a score in [-1, 1] with a reason. Add one by implementing `signal()` and registering it in `STRATEGIES` |
 | `risk.py` | Position sizing and pre-trade checks (below) |
 | `broker.py` | Paper fills with slippage (5 bps) and commission ($0.005/share, $1 min); cash, positions, fills, equity and journal in sqlite |
 | `backtest.py` | Daily event loop: decide at close, fill at next open. CAGR, Sharpe, Sortino, max drawdown, win rate, turnover; buy-and-hold benchmark (excess return, beta, alpha, correlation); round-trip trade analytics |
@@ -145,7 +145,7 @@ tick summary.
 
 ```
 common:   [--provider csv|yahoo|stooq] [--data DIR] [--cache-dir data/cache] [--cache-hours 12]
-          [--symbols ...] [--strategy momentum|mean_reversion|combined] [--sizing atr|fixed] [--cash N]
+          [--symbols ...] [--strategy momentum|mean_reversion|combined|breakout] [--sizing atr|fixed] [--cash N]
           [--trailing-stop F] [--stop-loss F] [--take-profit F] [--max-sector-pct F] [--sectors map.json]
 
 finagent backtest    [--start D] [--end D] [--benchmark auto|SYMBOL|none] [--out reports/backtest]
