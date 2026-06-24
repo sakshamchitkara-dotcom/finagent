@@ -143,3 +143,17 @@ def test_backtest_reports_open_positions_with_exit_levels():
         assert row["trailing_stop"] >= row["last"] * 0.85
     page = render_html("t", r.equity, r.metrics, r.fills, positions=r.positions)
     assert "Open positions and exit levels" in page
+
+
+def test_monte_carlo_is_seeded_and_brackets_the_mean():
+    from finagent.backtest import monte_carlo
+
+    trips = [{"pnl": p} for p in [500.0, -200.0, 300.0, -100.0, 250.0, -400.0, 150.0, None]]  # None = open trade
+    a = monte_carlo(trips, 10_000, runs=2000, seed=7)
+    assert a == monte_carlo(trips, 10_000, runs=2000, seed=7) and a != monte_carlo(trips, 10_000, runs=2000, seed=8)
+    assert a["mc_return_p5"] < 0.05 < a["mc_return_p95"]  # realised total: +500 on 10k = +5%
+    assert a["mc_return_p50"] == pytest.approx(0.05, abs=0.03)
+    assert 0 < a["mc_prob_loss"] < 0.5 and 0 < a["mc_max_drawdown_p50"] <= a["mc_max_drawdown_p95"]
+    assert monte_carlo([{"pnl": None}], 10_000) == {} and monte_carlo(trips, 10_000, runs=0) == {}
+    sure = monte_carlo([{"pnl": 10.0}] * 5, 1_000, runs=50)
+    assert sure["mc_prob_loss"] == 0 and sure["mc_max_drawdown_p95"] == 0 and sure["mc_return_p5"] == pytest.approx(0.05)
