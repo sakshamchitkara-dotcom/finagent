@@ -109,3 +109,47 @@ def test_repeated_tick_on_the_same_bar_is_a_no_op(tmp_path):
     assert again["mode"] == "no new bar" and again["orders"] == [] and again["equity"] == first["equity"]
     b = PaperBroker(db)
     assert len(b.rows("fills")) == fills and b.rows("journal")[-1]["outcome"] == "no new bar"
+
+
+class _Flaky(CSVProvider):
+    """Serves sample data except for the symbols in `down`."""
+
+    def __init__(self, down=()):
+        super().__init__()
+        self.down = set(down)
+
+    def history(self, symbol):
+        from finagent.data import DataUnavailable
+
+        if symbol in self.down:
+            raise DataUnavailable(f"{symbol} offline")
+        return super().history(symbol)
+
+
+def test_missing_symbol_is_journalled_and_skipped(tmp_path):
+    agent = Agent(_Flaky({"SYN_BANK"}), PaperBroker(tmp_path / "m.db"), SYMS, get_strategy("combined"),
+                  log=lambda _: None)
+    assert agent.tick()["mode"] == "rules"
+    skips = [j for j in agent.broker.rows("journal") if j["action"] == "skip"]
+    assert [(j["symbol"], j["outcome"]) for j in skips] == [("SYN_BANK", "no data")]
+
+
+def test_refuses_to_trade_when_a_held_position_has_no_price(tmp_path):
+    from finagent.data import DataUnavailable
+
+    db = tmp_path / "h.db"
+    Agent(CSVProvider(), PaperBroker(db), SYMS, get_strategy("mean_reversion"), log=lambda _: None).tick()
+    held = next(iter(PaperBroker(db).positions()))
+    agent = Agent(_Flaky({held}), PaperBroker(db), SYMS, get_strategy("mean_reversion"), log=lambda _: None)
+    fills = len(agent.broker.rows("fills"))
+    with pytest.raises(DataUnavailable, match=f"held position {held}"):
+        agent.tick()
+    assert len(agent.broker.rows("fills")) == fills
+
+
+def test_run_loop_logs_errors_and_keeps_going(tmp_path, monkeypatch):
+    monkeypatch.setattr("finagent.agent.time.sleep", lambda s: None)
+    logged = []
+    agent = Agent(_Flaky(SYMS), PaperBroker(tmp_path / "l.db"), SYMS, get_strategy("combined"), log=logged.append)
+    agent.run(interval=60, max_ticks=3)
+    assert len(logged) == 3 and all("no symbol returned usable data" in x["error"] for x in logged)
