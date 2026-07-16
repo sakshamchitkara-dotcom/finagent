@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
+from . import __version__
+
 SAMPLE_DIR = Path(__file__).resolve().parent.parent / "data" / "sample"
 
 
@@ -37,7 +39,7 @@ class BotChallenge(DataUnavailable):
 
 
 # A descriptive, non-browser UA. Yahoo rate-limits (429) spoofed browser UAs harder than honest clients.
-USER_AGENT = "finagent/0.2 (+https://github.com/sakshamchitkara-dotcom/finagent)"
+USER_AGENT = f"finagent/{__version__} (+https://github.com/sakshamchitkara-dotcom/finagent)"
 
 
 def looks_like_html(text: str) -> bool:
