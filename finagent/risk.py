@@ -43,6 +43,7 @@ class PortfolioState:
     day_start_equity: float
     returns: dict[str, list[float]] = field(default_factory=dict)  # recent daily returns, for correlation checks
     costs: dict[str, float] = field(default_factory=dict)  # average entry price per position (stop-loss/target)
+    highs: dict[str, float] = field(default_factory=dict)  # latest bar high per symbol (stop_basis="high")
 
     @property
     def gross_exposure(self) -> float:
@@ -65,6 +66,7 @@ class RiskConfig:
     daily_loss_limit: float = 0.03    # stop opening risk after a 3% down day
     cost_buffer: float = 0.005        # headroom for slippage + commission when checking cash
     trailing_stop: float = 0.0        # exit a long after it falls this fraction from its high close; 0 = off
+    stop_basis: Literal["close", "high"] = "close"  # trailing-stop high-water mark: highest close or intraday high
     stop_loss: float = 0.0            # exit a long once its close is this fraction below average entry; 0 = off
     take_profit: float = 0.0          # exit a long once its close is this fraction above average entry; 0 = off
     max_sector_pct: float = 0.40      # total long exposure per sector, fraction of equity
@@ -126,14 +128,19 @@ class RiskEngine:
         """Once halted, the policy is to flatten everything."""
         return [Order(s, "sell", q, "kill switch: flatten position", "risk") for s, q in state.positions.items() if q > 0]
 
+    def _mark_high(self, state: PortfolioState, symbol: str) -> float:
+        px = state.prices[symbol]
+        return max(px, state.highs.get(symbol, px)) if self.config.stop_basis == "high" else px
+
     def exit_orders(self, state: PortfolioState) -> list[Order]:
         """Protective exits for open longs, evaluated at the close: stop-loss and take-profit against the average
-        entry price (`state.costs`), then the trailing stop against the highest close since entry.
+        entry price (`state.costs`), then the trailing stop against the highest close since entry (or the highest
+        intraday high with stop_basis="high", from `state.highs`).
 
         Call once per bar. Ratchets the trailing-stop high-water marks and forgets those of positions no longer held.
         At most one full exit per symbol.
         """
-        # ponytail: tracks closes, not intraday highs/lows; an intraday stop model needs bar high/low per tick.
+        # ponytail: the stop triggers on the close, never intrabar; stop_basis only changes the high-water mark.
         c = self.config
         held = {s: q for s, q in state.positions.items() if q > 0}
         self.stop_highs = {s: h for s, h in self.stop_highs.items() if s in held}
@@ -148,7 +155,7 @@ class RiskEngine:
             elif cost and c.take_profit > 0 and px >= cost * (1 + c.take_profit):
                 why = f"take profit: close {px:.2f} is {px / cost - 1:.1%} above entry {cost:.2f} (target {c.take_profit:.0%})"
             if c.trailing_stop > 0:
-                hi = self.stop_highs[s] = max(self.stop_highs.get(s, px), px)
+                hi = self.stop_highs[s] = max(self.stop_highs.get(s, px), self._mark_high(state, s))
                 if why is None and px <= hi * (1 - c.trailing_stop):
                     why = (f"trailing stop: close {px:.2f} is {1 - px / hi:.1%} below high {hi:.2f} "
                            f"(limit {c.trailing_stop:.0%})")
@@ -163,7 +170,7 @@ class RiskEngine:
             if q <= 0:
                 continue
             px, cost = state.prices[s], state.costs.get(s)
-            hi = max(self.stop_highs.get(s, px), px)
+            hi = max(self.stop_highs.get(s, px), self._mark_high(state, s))
             out.append({
                 "symbol": s, "qty": q, "avg_entry": cost, "last": px, "value": q * px,
                 "unrealized_pnl": (px - cost) * q if cost else None, "weight": q * px / eq if eq > 0 else 0.0,
