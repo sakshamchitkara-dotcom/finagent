@@ -31,8 +31,12 @@ def test_cli_live_provider_needs_symbols_and_uses_cache(tmp_path, capsys, monkey
 def test_portfolio_and_report_show_exit_levels(tmp_path, capsys, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     db = str(tmp_path / "s.db")
-    assert main(["run", "--once", "--db", db, "--stop-loss", "0.08", "--take-profit", "0.25"]) == 0
+    assert main(["run", "--once", "--db", db, "--stop-loss", "0.08", "--take-profit", "0.25",
+                 "--trailing-stop", "0.1", "--stop-basis", "high"]) == 0
     capsys.readouterr()
+    from finagent.broker import PaperBroker
+
+    assert PaperBroker(db).get_meta("exit_config")["stop_basis"] == "high"
     assert main(["portfolio", "--db", db]) == 0
     out = capsys.readouterr().out
     assert "SYN_BANK" in out and "exits: stop loss" in out and "take profit" in out
