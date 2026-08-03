@@ -46,7 +46,9 @@ class Agent:
         rets: dict[str, list[float]] = {}
         highs: dict[str, float] = {}
         lb = self.risk.config.correlation_lookback
-        for s in self.symbols:
+        # Held names dropped from --symbols are still observed, so they stay priced and their exits still run.
+        universe = self.symbols + [s for s in b.positions() if s not in self.symbols]
+        for s in universe:
             try:
                 hist = self.provider.history(s)
                 closes = [bar.close for bar in hist[-lb - 1:]]

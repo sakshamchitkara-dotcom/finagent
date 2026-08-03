@@ -7,6 +7,7 @@ from finagent.agent import Agent, proposal_to_order
 from finagent.broker import PaperBroker
 from finagent.data import CSVProvider
 from finagent.llm import ClaudeAnalyst, Proposal, parse_proposals
+from finagent.risk import RiskConfig, RiskEngine
 from finagent.strategies import get_strategy
 
 SYMS = ["SYN_TECH", "SYN_BANK", "SYN_ENERGY", "SYN_UTIL", "SYN_INDEX"]
@@ -145,6 +146,19 @@ def test_refuses_to_trade_when_a_held_position_has_no_price(tmp_path):
     with pytest.raises(DataUnavailable, match=f"held position {held}"):
         agent.tick()
     assert len(agent.broker.rows("fills")) == fills
+
+
+def test_held_position_outside_symbols_is_still_priced_and_managed(tmp_path):
+    db = tmp_path / "u.db"
+    Agent(CSVProvider(), PaperBroker(db), ["SYN_BANK"], get_strategy("combined"), log=lambda _: None).tick()
+    assert "SYN_BANK" in PaperBroker(db).positions()
+    # the universe is narrowed: the old holding must not brick the account, and its exits must still run
+    agent = Agent(CSVProvider(), PaperBroker(db), ["SYN_UTIL"], get_strategy("mean_reversion"),
+                  RiskEngine(RiskConfig(stop_loss=1e-6)), log=lambda _: None)
+    s = agent.tick()
+    assert s["mode"] == "rules"
+    assert ("SYN_BANK", "sell") in [(o[0], o[1]) for o in s["orders"]]
+    assert "SYN_BANK" not in PaperBroker(db).positions()
 
 
 def test_run_loop_logs_errors_and_keeps_going(tmp_path, monkeypatch):
