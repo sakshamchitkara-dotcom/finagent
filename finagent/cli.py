@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import date
 from pathlib import Path
 
 from . import llm, optimize
@@ -24,6 +25,42 @@ DEFAULT_DB = "state/finagent.db"
 
 
 LIVE = {"yahoo": YahooProvider, "stooq": StooqProvider}
+
+
+def _fraction(text: str) -> float:
+    """argparse type: a fraction in [0, 1], e.g. 0.1 for 10%."""
+    v = float(text)
+    if not 0 <= v <= 1:
+        raise argparse.ArgumentTypeError(f"{text} is not a fraction in [0, 1], e.g. 0.1 for 10%")
+    return v
+
+
+def _non_negative(text: str) -> float:
+    v = float(text)
+    if not v >= 0:
+        raise argparse.ArgumentTypeError(f"{text} must be 0 or more")
+    return v
+
+
+def _positive(text: str) -> float:
+    v = float(text)
+    if not v > 0:
+        raise argparse.ArgumentTypeError(f"{text} must be greater than 0")
+    return v
+
+
+def _count(text: str) -> int:
+    v = int(text)
+    if v < 0:
+        raise argparse.ArgumentTypeError(f"{text} must be 0 or more")
+    return v
+
+
+def _date(text: str) -> str:
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a date like 2021-01-31") from None
 
 
 def _provider(args):
@@ -101,7 +138,7 @@ def cmd_backtest(args) -> int:
     try:
         res = run_backtest(provider, symbols, get_strategy(args.strategy), _risk_config(args),
                            cash=args.cash, start=args.start, end=args.end, benchmark=_benchmark(args))
-    except DataUnavailable as e:
+    except (DataUnavailable, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
     _print_sources(provider)
@@ -293,16 +330,16 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("--symbols", nargs="+", help="default: every CSV in --data")
     common.add_argument("--strategy", default="combined", choices=sorted(STRATEGIES))
     common.add_argument("--sizing", default="atr", choices=["atr", "fixed"])
-    common.add_argument("--cash", type=float, default=100_000.0)
-    common.add_argument("--trailing-stop", type=float, default=0.0, metavar="FRACTION",
+    common.add_argument("--cash", type=_positive, default=100_000.0)
+    common.add_argument("--trailing-stop", type=_fraction, default=0.0, metavar="FRACTION",
                         help="exit a long after it falls this fraction from its highest close (e.g. 0.1); 0 = off")
     common.add_argument("--stop-basis", choices=["close", "high"], default="close",
                         help="trailing-stop high-water mark: highest close (default) or highest intraday high")
-    common.add_argument("--stop-loss", type=float, default=0.0, metavar="FRACTION",
+    common.add_argument("--stop-loss", type=_fraction, default=0.0, metavar="FRACTION",
                         help="exit a long once it closes this fraction below its average entry (e.g. 0.08); 0 = off")
-    common.add_argument("--take-profit", type=float, default=0.0, metavar="FRACTION",
+    common.add_argument("--take-profit", type=_non_negative, default=0.0, metavar="FRACTION",
                         help="exit a long once it closes this fraction above its average entry (e.g. 0.25); 0 = off")
-    common.add_argument("--max-sector-pct", type=float, default=RiskConfig.max_sector_pct, metavar="FRACTION",
+    common.add_argument("--max-sector-pct", type=_fraction, default=RiskConfig.max_sector_pct, metavar="FRACTION",
                         help="cap on total long exposure per sector (default %(default)s)")
     common.add_argument("--sectors", metavar="JSON", help='JSON file {"SYMBOL": "sector"} extending the built-in map')
 
@@ -310,12 +347,12 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     bt = sub.add_parser("backtest", parents=[common], help="run a backtest and write CSV + HTML report")
-    bt.add_argument("--start")
-    bt.add_argument("--end")
+    bt.add_argument("--start", type=_date)
+    bt.add_argument("--end", type=_date)
     bt.add_argument("--out", default="reports/backtest")
     bt.add_argument("--benchmark", default="auto",
                     help="buy-and-hold benchmark symbol; auto = SPY (live) / SYN_INDEX (sample); none disables")
-    bt.add_argument("--monte-carlo", type=int, default=0, metavar="RUNS",
+    bt.add_argument("--monte-carlo", type=_count, default=0, metavar="RUNS",
                     help="bootstrap the closed trades RUNS times and report return/drawdown percentiles")
     bt.add_argument("--seed", type=int, default=0, help="random seed for --monte-carlo (default 0)")
     bt.set_defaults(fn=cmd_backtest)
@@ -323,9 +360,9 @@ def main(argv: list[str] | None = None) -> int:
     sw = sub.add_parser("sweep", parents=[common], help="parameter grid: in-sample vs out-of-sample results table")
     sw.add_argument("--grid", action="append", metavar="NAME=V1,V2",
                     help=f"repeatable; strategy entry/exit or any numeric RiskConfig field (default {DEFAULT_GRID})")
-    sw.add_argument("--split", help="first out-of-sample date (default: 70%% through the data)")
-    sw.add_argument("--start")
-    sw.add_argument("--end")
+    sw.add_argument("--split", type=_date, help="first out-of-sample date (default: 70%% through the data)")
+    sw.add_argument("--start", type=_date)
+    sw.add_argument("--end", type=_date)
     sw.add_argument("--out", default="reports/sweep.csv")
     sw.set_defaults(fn=cmd_sweep)
 
@@ -333,15 +370,15 @@ def main(argv: list[str] | None = None) -> int:
     wf.add_argument("--grid", action="append", metavar="NAME=V1,V2", help="as for sweep")
     wf.add_argument("--train-days", type=int, default=504, help="in-sample window in trading days (default 504)")
     wf.add_argument("--test-days", type=int, default=126, help="out-of-sample window in trading days (default 126)")
-    wf.add_argument("--start")
-    wf.add_argument("--end")
+    wf.add_argument("--start", type=_date)
+    wf.add_argument("--end", type=_date)
     wf.add_argument("--benchmark", default="auto", help="as for backtest")
     wf.add_argument("--out", default="reports/walkforward.csv")
     wf.set_defaults(fn=cmd_walkforward)
 
     run = sub.add_parser("run", parents=[common], help="run the autonomous paper-trading loop")
     run.add_argument("--once", action="store_true", help="single tick, then exit")
-    run.add_argument("--interval", type=float, default=86_400, help="seconds between ticks")
+    run.add_argument("--interval", type=_positive, default=86_400, help="seconds between ticks")
     run.add_argument("--db", default=DEFAULT_DB)
     run.add_argument("--no-llm", action="store_true", help="force the rule-based policy")
     run.add_argument("--webhook", metavar="URL",
