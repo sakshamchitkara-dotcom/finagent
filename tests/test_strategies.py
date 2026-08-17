@@ -87,3 +87,12 @@ def test_breakout_backtest_trades_only_on_channel_breaks():
     r = run_backtest(CSVProvider(), ["SYN_TECH", "SYN_INDEX"], get_strategy("breakout"), end="2021-12-31")
     assert r.fills and all("55-day high" in f["reason"] for f in r.fills if f["side"] == "buy")
     assert all("20-day low" in f["reason"] for f in r.fills if f["side"] == "sell" and f["source"] == "rules")
+
+
+def test_features_bollinger_matches_the_full_series_band():
+    from finagent import indicators as ind
+
+    bars = CSVProvider().history("SYN_TECH")[:300]
+    f, c = features(bars), [b.close for b in bars[-250:]]
+    mid, up, dn = ind.bollinger(c, 20, 2.0)
+    assert (f["bb_mid"], f["bb_upper"], f["bb_lower"]) == pytest.approx((mid[-1], up[-1], dn[-1]), rel=1e-12)

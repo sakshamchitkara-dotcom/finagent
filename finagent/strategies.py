@@ -30,7 +30,7 @@ def features(bars: Sequence[Bar]) -> Optional[dict]:
     h = [b.high for b in bars]
     lo = [b.low for b in bars]
     line, sig, hist = ind.macd(c)
-    mid, up, dn = ind.bollinger(c, 20, 2.0)
+    mid, up, dn = ind.bollinger(c[-20:], 20, 2.0)  # only the latest band is used: O(20), not O(20 x LOOKBACK)
     width = up[-1] - dn[-1]
     return {
         "date": bars[-1].date,
