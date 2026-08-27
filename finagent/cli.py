@@ -22,6 +22,7 @@ from .strategies import STRATEGIES, get_strategy
 
 DISCLAIMER = "PAPER TRADING ONLY. Not financial advice. finagent never places real orders."
 DEFAULT_DB = "state/finagent.db"
+DEFAULT_CASH = 100_000.0
 
 
 LIVE = {"yahoo": YahooProvider, "stooq": StooqProvider}
@@ -250,7 +251,11 @@ def cmd_run(args) -> int:
             print(json.dumps(summary, default=str))
         notify(summary)
 
-    agent = Agent(provider, PaperBroker(args.db, starting_cash=args.cash), symbols, get_strategy(args.strategy),
+    broker = PaperBroker(args.db, starting_cash=args.cash)
+    if args.cash_given and broker.starting_cash != args.cash:
+        print(f"WARNING: --cash {args.cash:,.2f} ignored: {args.db} is an existing paper account that started with "
+              f"{broker.starting_cash:,.2f} (use a new --db for a fresh account)", file=sys.stderr)
+    agent = Agent(provider, broker, symbols, get_strategy(args.strategy),
                   RiskEngine(_risk_config(args)), analyst, log=log)
     try:
         if args.once:
@@ -330,7 +335,8 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("--symbols", nargs="+", help="default: every CSV in --data")
     common.add_argument("--strategy", default="combined", choices=sorted(STRATEGIES))
     common.add_argument("--sizing", default="atr", choices=["atr", "fixed"])
-    common.add_argument("--cash", type=_positive, default=100_000.0)
+    common.add_argument("--cash", type=_positive, default=None,
+                        help=f"starting cash (default {DEFAULT_CASH:,.0f}); run: only used when --db is a new account")
     common.add_argument("--trailing-stop", type=_fraction, default=0.0, metavar="FRACTION",
                         help="exit a long after it falls this fraction from its highest close (e.g. 0.1); 0 = off")
     common.add_argument("--stop-basis", choices=["close", "high"], default="close",
@@ -398,6 +404,9 @@ def main(argv: list[str] | None = None) -> int:
     rp.set_defaults(fn=cmd_report)
 
     args = p.parse_args(argv)
+    if hasattr(args, "cash"):
+        args.cash_given = args.cash is not None
+        args.cash = DEFAULT_CASH if args.cash is None else args.cash
     print(DISCLAIMER)
     return args.fn(args)
 
