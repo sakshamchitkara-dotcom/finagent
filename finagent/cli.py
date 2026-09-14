@@ -57,6 +57,13 @@ def _count(text: str) -> int:
     return v
 
 
+def _days(text: str) -> int:
+    v = int(text)
+    if v < 2:
+        raise argparse.ArgumentTypeError(f"{text} must be at least 2")
+    return v
+
+
 def _date(text: str) -> str:
     try:
         return date.fromisoformat(text).isoformat()
@@ -81,7 +88,8 @@ def _provider(args):
 def _risk_config(args) -> RiskConfig:
     cfg = RiskConfig(sizing=args.sizing, trailing_stop=args.trailing_stop, stop_basis=args.stop_basis,
                      stop_loss=args.stop_loss,
-                     take_profit=args.take_profit, max_sector_pct=args.max_sector_pct)
+                     take_profit=args.take_profit, max_sector_pct=args.max_sector_pct,
+                     regime_symbol=(args.regime_filter or "").upper(), regime_sma=args.regime_sma)
     if args.sectors:
         try:
             extra = json.loads(Path(args.sectors).read_text())
@@ -347,6 +355,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="exit a long once it closes this fraction above its average entry (e.g. 0.25); 0 = off")
     common.add_argument("--max-sector-pct", type=_fraction, default=RiskConfig.max_sector_pct, metavar="FRACTION",
                         help="cap on total long exposure per sector (default %(default)s)")
+    common.add_argument("--regime-filter", metavar="SYMBOL",
+                        help="no new buys while SYMBOL (e.g. SPY) closes below its --regime-sma-day SMA; sells and "
+                             "exits still run. Default off")
+    common.add_argument("--regime-sma", type=_days, default=RiskConfig.regime_sma, metavar="DAYS",
+                        help="moving-average length for --regime-filter (default %(default)s)")
     common.add_argument("--sectors", metavar="JSON", help='JSON file {"SYMBOL": "sector"} extending the built-in map')
 
     p = argparse.ArgumentParser(prog="finagent", description=DISCLAIMER)

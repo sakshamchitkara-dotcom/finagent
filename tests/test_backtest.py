@@ -167,3 +167,19 @@ def test_report_escapes_untrusted_text_and_handles_short_history():
     page = render_html(evil, [{"ts": "2024-01-02", "equity": 1.0}], {"note": evil}, fills, journal, note=evil)
     assert "<script>" not in page and "&lt;script&gt;" in page
     assert "Not enough equity history to chart yet" in page
+
+
+def test_regime_filter_only_buys_while_the_regime_symbol_is_above_its_sma():
+    from finagent.risk import regime
+
+    p, syms = CSVProvider(), ["SYN_TECH", "SYN_BANK"]
+    cfg = RiskConfig(regime_symbol="SYN_INDEX", regime_sma=100)
+    res = run_backtest(p, syms, get_strategy("momentum"), cfg, start="2020-01-01")
+    base = run_backtest(p, syms, get_strategy("momentum"), start="2020-01-01")
+    gate = dict(regime(p.history("SYN_INDEX"), 100))
+    days = [b.date for b in p.history("SYN_INDEX")]
+    buys = [f for f in res.fills if f["side"] == "buy"]
+    assert buys and len(buys) < len([f for f in base.fills if f["side"] == "buy"])
+    for f in buys:  # the decision close (the index bar before the fill) was risk on
+        assert gate[days[days.index(f["ts"]) - 1]] == ""
+    assert any("SYN_INDEX regime filter" in j["risk"] for j in res.journal if not j["approved"])

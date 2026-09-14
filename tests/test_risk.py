@@ -186,3 +186,21 @@ def test_trailing_stop_can_ratchet_on_intraday_highs():
     [o] = by_high.exit_orders(s)
     assert "below high 115.00" in o.reason
     assert by_high.levels(s)[0]["trailing_stop"] == pytest.approx(103.5)
+
+
+def test_regime_filter_blocks_buys_but_not_sells():
+    from finagent.data import Bar
+    from finagent.risk import regime
+
+    bars = [Bar(f"d{i:03}", c, c, c, c, 0) for i, c in enumerate([10.0] * 5 + [9.0])]
+    gate = regime(bars, 5)
+    assert "fewer than 5 bars" in gate[0][1] and gate[4][1] == ""   # warm-up is risk off, flat at SMA is on
+    assert "below its 5-day SMA" in gate[5][1]
+    r = RiskEngine(RiskConfig(regime_symbol="SPY"))
+    s = state(positions={"A": 10})
+    s.risk_off = gate[5][1]
+    d = r.check(Order("A", "buy", 5), s)
+    assert not d.approved and "SPY regime filter" in d.checks[-1]
+    assert r.check(Order("A", "sell", 5), s).approved
+    s.risk_off = ""
+    assert r.check(Order("A", "buy", 5), s).approved

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from .broker import PaperBroker
 from .data import DataProvider, DataUnavailable
 from .llm import AnalystError, Proposal
-from .risk import Order, RiskEngine
+from .risk import Order, RiskEngine, regime
 from .strategies import Strategy, features, rule_based_order
 
 
@@ -120,10 +120,16 @@ class Agent:
             orders = stops + [o for o in orders if o.symbol not in stopped]
 
         # risk-check + execute, sells first to free cash
+        risk_off, c = "", self.risk.config
+        if c.regime_symbol and any(o.side == "buy" for o in orders):
+            try:
+                risk_off = regime(self.provider.history(c.regime_symbol), c.regime_sma)[-1][1]
+            except (DataUnavailable, IndexError) as e:
+                risk_off = f"regime filter: no data ({e or 'empty history'})"
         results = []
         for o in sorted(orders, key=lambda o: o.side != "sell"):
             st = b.begin_day(as_of, prices)
-            st.returns = rets
+            st.returns, st.risk_off = rets, risk_off
             d = self.risk.check(o, st)
             outcome = "rejected: " + d.checks[-1] if not d.approved else ""
             if d.approved:
@@ -141,7 +147,7 @@ class Agent:
         held = b.positions()
         b.set_meta("stop_highs", {s: h for s, h in self.risk.stop_highs.items() if s in held})
         b.set_meta("last_bar", seen)
-        c = self.risk.config  # so `portfolio` and `report` can show the exit levels this loop is enforcing
+        # so `portfolio` and `report` can show the exit levels this loop is enforcing
         b.set_meta("exit_config", {"stop_loss": c.stop_loss, "take_profit": c.take_profit,
                                    "trailing_stop": c.trailing_stop, "stop_basis": c.stop_basis})
         final_equity = b.mark(as_of, prices)

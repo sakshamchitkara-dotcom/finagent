@@ -6,6 +6,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Literal
 
+from .indicators import sma
+
 
 # Symbol -> sector for the sector exposure cap. Symbols not listed are not sector-capped.
 # Broad index ETFs share one bucket so the agent cannot stack SPY + QQQ + VOO as "diversification".
@@ -44,6 +46,7 @@ class PortfolioState:
     returns: dict[str, list[float]] = field(default_factory=dict)  # recent daily returns, for correlation checks
     costs: dict[str, float] = field(default_factory=dict)  # average entry price per position (stop-loss/target)
     highs: dict[str, float] = field(default_factory=dict)  # latest bar high per symbol (stop_basis="high")
+    risk_off: str = ""  # why the market regime filter blocks new buys; "" = buys allowed
 
     @property
     def gross_exposure(self) -> float:
@@ -73,7 +76,23 @@ class RiskConfig:
     max_correlated_pct: float = 0.40  # order symbol + held names correlated >= threshold, fraction of equity
     correlation_threshold: float = 0.70
     correlation_lookback: int = 60    # daily returns used for the correlation estimate
+    regime_symbol: str = ""           # e.g. "SPY": no new buys while it closes below its regime_sma-day SMA; "" = off
+    regime_sma: int = 200
     sectors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_SECTORS))
+
+
+def regime(bars, period: int) -> list[tuple[str, str]]:
+    """(date, reason) per bar of the regime symbol: reason is "" when that close is at or above its `period`-day
+    SMA (risk on), else why new buys are blocked. Too little history counts as risk off."""
+    closes = [b.close for b in bars]
+    out = []
+    for b, c, m in zip(bars, closes, sma(closes, period)):
+        if m is None:
+            why = f"regime filter: fewer than {period} bars of history"
+        else:
+            why = "" if c >= m else f"regime filter: close {c:.2f} below its {period}-day SMA {m:.2f}"
+        out.append((b.date, why))
+    return out
 
 
 def correlation(a: list[float], b: list[float], min_obs: int = 20) -> float:
@@ -216,6 +235,11 @@ class RiskEngine:
         if day <= -c.daily_loss_limit:
             return reject(f"daily loss limit hit ({day:.1%}, limit -{c.daily_loss_limit:.0%})")
         checks.append(f"ok: day P&L {day:+.1%}")
+
+        if state.risk_off:
+            return reject(f"{c.regime_symbol} {state.risk_off}")
+        if c.regime_symbol:
+            checks.append(f"ok: {c.regime_symbol} above its {c.regime_sma}-day SMA")
 
         qty = order.qty
         caps = {
