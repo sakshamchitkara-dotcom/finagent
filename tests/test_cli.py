@@ -9,6 +9,11 @@ def test_cli_end_to_end(tmp_path, capsys, monkeypatch):
     out, db = tmp_path / "bt", str(tmp_path / "s.db")
     assert main(["backtest", "--symbols", "SYN_UTIL", "--end", "2020-12-31", "--out", str(out)]) == 0
     assert (out / "report.html").exists() and (out / "equity.csv").read_text().startswith("ts,equity,cash")
+    import json
+
+    saved = json.loads((out / "metrics.json").read_text())
+    assert saved["config"]["symbols"] == ["SYN_UTIL"] and saved["config"]["end"] == "2020-12-31"
+    assert saved["config"]["risk"]["max_drawdown"] == 0.2 and "sharpe" in saved["metrics"]
     assert main(["run", "--once", "--db", db]) == 0
     assert main(["portfolio", "--db", db]) == 0
     assert main(["report", "--db", db, "--out", str(tmp_path / "r.html")]) == 0

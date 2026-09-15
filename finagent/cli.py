@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
+import math
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
-from . import llm, optimize
+from . import __version__, llm, optimize
 from .agent import Agent
 from .backtest import compute_metrics, monte_carlo, round_trips, run_backtest, trade_stats, write_csv
 from .broker import PaperBroker
@@ -157,12 +159,23 @@ def cmd_backtest(args) -> int:
     write_csv(res.fills, out / "trades.csv")
     write_csv(res.journal, out / "journal.csv")
     write_csv(round_trips(res.fills), out / "round_trips.csv")
+    cfg = dataclasses.asdict(_risk_config(args))
+    cfg.pop("sectors")  # the full map is long; --sectors below records any override
+    run = {"finagent": __version__, "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+           "config": {"strategy": args.strategy, "symbols": symbols, "provider": args.provider,
+                      "data": args.data if args.provider == "csv" else None, "start": args.start, "end": args.end,
+                      "cash": args.cash, "benchmark": _benchmark(args), "sectors": args.sectors,
+                      "monte_carlo": args.monte_carlo, "seed": args.seed, "risk": cfg},
+           # strict JSON: an all-winners profit_factor is inf, which json would write as a non-standard Infinity
+           "metrics": {k: None if isinstance(v, float) and not math.isfinite(v) else v
+                       for k, v in res.metrics.items()}}
+    (out / "metrics.json").write_text(json.dumps(run, indent=2) + "\n")  # read back by `finagent compare`
     report = write_report(out / "report.html", f"Backtest: {args.strategy} on {', '.join(symbols)}",
                           res.equity, res.metrics, res.fills, note=_data_note(args), benchmark=res.benchmark,
                           positions=res.positions)
     print(f"Backtest {args.strategy} | {', '.join(symbols)}")
     _print_metrics(res.metrics)
-    print(f"wrote {out}/{{equity,trades,round_trips,journal}}.csv and {report}")
+    print(f"wrote {out}/{{equity,trades,round_trips,journal}}.csv, {out}/metrics.json and {report}")
     return 0
 
 
