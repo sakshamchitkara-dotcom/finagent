@@ -179,6 +179,60 @@ def cmd_backtest(args) -> int:
     return 0
 
 
+def _load_run(path: str) -> dict:
+    f = Path(path)
+    f = f / "metrics.json" if f.is_dir() else f
+    try:
+        run = json.loads(f.read_text())
+    except (OSError, ValueError) as e:
+        sys.exit(f"compare: cannot read {f}: {e} (point at a backtest --out directory or its metrics.json)")
+    if not isinstance(run, dict) or not isinstance(run.get("metrics"), dict):
+        sys.exit(f"compare: {f} is not a finagent backtest metrics.json")
+    return run
+
+
+def _flat(d: dict, prefix: str = "") -> dict:
+    out = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            out.update(_flat(v, f"{prefix}{k}."))
+        else:
+            out[prefix + k] = v
+    return out
+
+
+def cmd_compare(args) -> int:
+    a, b = _load_run(args.a), _load_run(args.b)
+    print(f"A: {args.a}  (finagent {a.get('finagent', '?')}, {a.get('created', '?')})")
+    print(f"B: {args.b}  (finagent {b.get('finagent', '?')}, {b.get('created', '?')})")
+    ca, cb = _flat(a.get("config", {})), _flat(b.get("config", {}))
+    changed = [k for k in sorted(ca.keys() | cb.keys()) if ca.get(k) != cb.get(k)]
+    print("config differences:" if changed else "config: identical")
+    for k in changed:
+        print(f"  {k:<28} {ca.get(k)!r:>14} -> {cb.get(k)!r}")
+    ma, mb = a["metrics"], b["metrics"]
+
+    def fmt(k, v):
+        if isinstance(v, float):
+            return f"{v:.2%}" if k in PCT else f"{v:,.2f}"
+        return "-" if v is None else str(v)
+
+    print(f"  {'metric':<24} {'A':>14} {'B':>14} {'B - A':>12}")
+    for k in [k for k in ma if k in mb] + [k for k in mb if k not in ma]:
+        va, vb = ma.get(k), mb.get(k)
+        num = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (va, vb))
+        if not num and va == vb and not args.all:
+            continue  # identical labels (strategy, benchmark) add nothing
+        if not num:
+            diff = ""
+        elif k in PCT:
+            diff = f"{(vb - va) * 100:+.2f} pp"
+        else:
+            diff = f"{vb - va:+,}" if isinstance(va, int) and isinstance(vb, int) else f"{vb - va:+,.2f}"
+        print(f"  {k:<24} {fmt(k, va):>14} {fmt(k, vb):>14} {diff:>12}")
+    return 0
+
+
 def _print_table(rows: list[dict], cols: list[str]) -> None:
     def cell(k, v):
         if isinstance(v, float):
@@ -428,6 +482,12 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--db", default=DEFAULT_DB)
     rp.add_argument("--out", default="reports/paper_report.html")
     rp.set_defaults(fn=cmd_report)
+
+    cp = sub.add_parser("compare", help="compare two saved backtests (their --out directories or metrics.json)")
+    cp.add_argument("a", help="baseline run")
+    cp.add_argument("b", help="run to compare against the baseline")
+    cp.add_argument("--all", action="store_true", help="also list non-numeric metrics that are the same")
+    cp.set_defaults(fn=cmd_compare)
 
     args = p.parse_args(argv)
     if hasattr(args, "cash"):
