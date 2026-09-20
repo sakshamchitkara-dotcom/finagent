@@ -21,10 +21,10 @@ REPORTED = ("sharpe", "total_return", "max_drawdown", "trades")
 
 
 class _Memo:
-    """Fetch each symbol once per sweep; every backtest in the sweep reuses the bars."""
+    """Fetch each symbol once per sweep; every backtest in the sweep reuses the bars and indicator snapshots."""
 
     def __init__(self, provider: DataProvider):
-        self.provider, self.cache = provider, {}
+        self.provider, self.cache, self.features = provider, {}, {}
 
     def history(self, symbol: str) -> list[Bar]:
         if symbol not in self.cache:
@@ -106,8 +106,8 @@ def sweep(provider: DataProvider, symbols: list[str], strategy: str, grid: dict[
     rows = []
     for params in combos(grid) or [{}]:
         strat, cfg = configure(strategy, params, base)
-        ins = run_backtest(p, symbols, strat, cfg, cash, start=start, end=is_end).metrics
-        oos = run_backtest(p, symbols, strat, cfg, cash, start=split, end=end).metrics
+        ins = run_backtest(p, symbols, strat, cfg, cash, start=start, end=is_end, feature_cache=p.features).metrics
+        oos = run_backtest(p, symbols, strat, cfg, cash, start=split, end=end, feature_cache=p.features).metrics
         rows.append({**params, "split": split, **_pick("is", ins), **_pick("oos", oos)})
     rows.sort(key=lambda r: r["is_sharpe"], reverse=True)
     return rows
@@ -147,11 +147,12 @@ def walk_forward(provider: DataProvider, symbols: list[str], strategy: str, grid
         best, best_m = {}, None
         for params in combos(grid) or [{}]:
             strat, cfg = configure(strategy, params, base)
-            m = run_backtest(p, symbols, strat, cfg, cash, start=train[0], end=train[-1]).metrics
+            m = run_backtest(p, symbols, strat, cfg, cash, start=train[0], end=train[-1],
+                             feature_cache=p.features).metrics
             if best_m is None or m["sharpe"] > best_m["sharpe"]:
                 best, best_m = params, m
         strat, cfg = configure(strategy, best, base)
-        res = run_backtest(p, symbols, strat, cfg, cash, start=test[0], end=test[-1])
+        res = run_backtest(p, symbols, strat, cfg, cash, start=test[0], end=test[-1], feature_cache=p.features)
         scale = (curve[-1] if curve else cash) / cash  # compound the stitched curve across folds
         curve += [r["equity"] * scale for r in res.equity]
         oos_days += [r["ts"] for r in res.equity]
