@@ -34,6 +34,10 @@ jobs:
             --stop-basis high --monte-carlo 500 --out reports/ci/breakout | tee reports/ci/breakout.txt
           grep -q "mc_return_p50" reports/ci/breakout.txt
           grep -q "Open positions and exit levels" reports/ci/breakout/report.html
+          finagent backtest --trailing-stop 0.1 --regime-filter SYN_INDEX --out reports/ci/regime
+          finagent compare reports/ci reports/ci/regime | grep -q "risk.regime_symbol"
+          finagent sweep --symbols SYN_TECH --regime-filter SYN_INDEX --grid regime_sma=100,200 \
+            --out reports/ci/regime_sweep.csv
           finagent sweep --symbols SYN_TECH SYN_UTIL --grid entry=0.3,0.4 --out reports/ci/sweep.csv
           finagent walkforward --symbols SYN_TECH --grid entry=0.3,0.4 --train-days 252 --test-days 252 \
             --out reports/ci/walkforward.csv
