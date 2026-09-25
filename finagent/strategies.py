@@ -8,6 +8,7 @@ from typing import Optional, Protocol, Sequence
 
 from . import indicators as ind
 from .data import Bar
+from .risk import Order
 
 LOOKBACK = 250  # bars of history fed to indicators; bounds per-step cost in backtests
 MIN_BARS = 60
@@ -109,10 +110,8 @@ def get_strategy(name: str) -> Strategy:
         raise ValueError(f"unknown strategy {name!r}; choose from {sorted(STRATEGIES)}") from None
 
 
-def rule_based_order(symbol: str, sig: Signal, strategy: Strategy, held: int, equity: float, risk) -> "Order | None":
+def rule_based_order(symbol: str, sig: Signal, strategy: Strategy, held: int, equity: float, risk) -> Optional[Order]:
     """Long-only policy: enter on score >= entry, exit fully on score <= exit. Sizing comes from the risk engine."""
-    from .risk import Order
-
     f = sig.features
     if held <= 0 and sig.score >= strategy.entry:
         qty = risk.size(equity, f["close"], f["atr14"])
