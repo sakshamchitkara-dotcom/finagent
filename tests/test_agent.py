@@ -167,3 +167,15 @@ def test_run_loop_logs_errors_and_keeps_going(tmp_path, monkeypatch):
     agent = Agent(_Flaky(SYMS), PaperBroker(tmp_path / "l.db"), SYMS, get_strategy("combined"), log=logged.append)
     agent.run(interval=60, max_ticks=3)
     assert len(logged) == 3 and all("no symbol returned usable data" in x["error"] for x in logged)
+
+
+@pytest.mark.parametrize("gate, filled", [("SYN_INDEX", False), ("SYN_UTIL", True)])
+def test_live_tick_applies_the_regime_filter(tmp_path, gate, filled):
+    # On the last sample bar SYN_INDEX closes below its 200-day SMA and SYN_UTIL above it.
+    risk = RiskEngine(RiskConfig(regime_symbol=gate))
+    agent = Agent(CSVProvider(), PaperBroker(tmp_path / "a.db"), SYMS, get_strategy("mean_reversion"), risk,
+                  log=lambda _: None)
+    buys = [o for o in agent.tick()["orders"] if o[1] == "buy"]
+    assert buys and all((o[3] > 0) == filled for o in buys)
+    if not filled:
+        assert all("below its 200-day SMA" in o[4] for o in buys)

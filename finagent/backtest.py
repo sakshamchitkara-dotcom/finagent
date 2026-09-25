@@ -5,13 +5,14 @@ from __future__ import annotations
 import csv
 import math
 import random
+from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
 from .broker import PaperBroker
 from .data import Bar, DataProvider, DataUnavailable
-from .risk import RiskConfig, RiskEngine
+from .risk import RiskConfig, RiskEngine, regime
 from .strategies import LOOKBACK, Strategy, features, rule_based_order
 
 TRADING_DAYS = 252
@@ -211,6 +212,10 @@ def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
 
     broker = PaperBroker(":memory:", starting_cash=cash, **broker_kwargs)
     risk = RiskEngine(risk_config)
+    rc = risk.config
+    gate = regime(history.get(rc.regime_symbol) or provider.history(rc.regime_symbol), rc.regime_sma) \
+        if rc.regime_symbol else []
+    gate_days = [d for d, _ in gate]
     pending = []
     for i in range(first, len(dates)):
         day = dates[i]
@@ -219,9 +224,12 @@ def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
         lb = risk.config.correlation_lookback  # correlations use closes up to yesterday only (no look-ahead)
         rets = {s: daily_returns([b.close for b in bars[s][max(0, i - lb - 1):i]]) for s in symbols} \
             if any(o.side == "buy" for o in pending) else {}
+        # regime as of the last regime-symbol close strictly before today (the decision was made at that close)
+        j = bisect_left(gate_days, day) - 1
+        risk_off = (gate[j][1] if j >= 0 else "regime filter: no data before this day") if gate else ""
         for order in sorted(pending, key=lambda o: o.side != "sell"):
             state = broker.begin_day(day, opens)
-            state.returns = rets
+            state.returns, state.risk_off = rets, risk_off
             d = risk.check(order, state)
             outcome = "rejected"
             if d.approved:
