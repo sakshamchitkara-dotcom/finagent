@@ -125,3 +125,10 @@ def test_html_report_overlays_benchmark():
     r = run_backtest(p, ["SYN_TECH"], get_strategy("momentum"), end="2020-06-30", benchmark="SYN_INDEX")
     page = render_html("t", r.equity, r.metrics, r.fills, benchmark=r.benchmark)
     assert page.count('class="bm"') == 1 and "SYN_INDEX buy-and-hold" in page and "Per-symbol trade summary" in page
+
+
+def test_trailing_stop_exits_in_backtest():
+    p = CSVProvider()
+    r = run_backtest(p, p.symbols(), get_strategy("momentum"), RiskConfig(trailing_stop=0.05), end="2021-12-31")
+    stops = [f for f in r.fills if f["reason"].startswith("trailing stop")]
+    assert stops and all(f["side"] == "sell" and f["source"] == "risk" for f in stops)

@@ -196,8 +196,12 @@ def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
             if risk.update(state):
                 pending = risk.liquidation_orders(state)
                 continue
+            pending = risk.trailing_stop_orders(state)
+            stopped = {o.symbol for o in pending}
             held = state.positions
             for s in symbols:
+                if s in stopped:
+                    continue
                 f = features(bars[s][:i + 1])
                 if f is None:
                     continue

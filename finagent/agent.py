@@ -35,6 +35,7 @@ class Agent:
         self.provider, self.broker, self.symbols, self.strategy = provider, broker, symbols, strategy
         self.risk = risk or RiskEngine()
         self.risk.killed = bool(broker.get_meta("killed"))  # the kill switch survives restarts
+        self.risk.stop_highs = broker.get_meta("stop_highs") or {}  # so do trailing-stop high-water marks
         self.analyst, self.log = analyst, log
 
     def tick(self) -> dict:
@@ -67,6 +68,7 @@ class Agent:
 
         # decide
         mode, orders, notes = "rules", [], {}
+        stops = self.risk.trailing_stop_orders(state)
         if self.risk.update(state):
             mode, orders = "kill-switch", self.risk.liquidation_orders(state)
         elif self.analyst is not None:
@@ -92,6 +94,10 @@ class Agent:
                     notes[s] = f"{self.strategy.name} score {sig.score:+.2f} (entry {self.strategy.entry}, " \
                                f"exit {self.strategy.exit}): {sig.reason}"
 
+        if mode != "kill-switch" and stops:  # a stop exit overrides whatever was decided for that symbol
+            stopped = {o.symbol for o in stops}
+            orders = stops + [o for o in orders if o.symbol not in stopped]
+
         # risk-check + execute, sells first to free cash
         results = []
         for o in sorted(orders, key=lambda o: o.side != "sell"):
@@ -109,6 +115,8 @@ class Agent:
 
         # journal the book
         b.set_meta("killed", self.risk.killed)
+        held = b.positions()
+        b.set_meta("stop_highs", {s: h for s, h in self.risk.stop_highs.items() if s in held})
         final_equity = b.mark(as_of, prices)
         summary = {"ts": now, "as_of": as_of, "mode": mode, "orders": results,
                    "equity": round(final_equity, 2), "cash": round(b.cash, 2), "killed": self.risk.killed}

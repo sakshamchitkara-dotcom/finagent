@@ -83,3 +83,19 @@ def test_parse_and_convert_proposals():
     assert len(ps) == 1 and ps[0].target_weight == 1.0 and ps[0].confidence == 0.0
     assert proposal_to_order(Proposal("A", "sell", 0.0, 1, "exit"), 10, 100.0, 10_000).qty == 10
     assert proposal_to_order(Proposal("A", "buy", 0.05, 1, "already there"), 10, 100.0, 10_000) is None
+
+
+def test_trailing_stop_high_survives_restart_and_fires(tmp_path):
+    from finagent.risk import Order, RiskConfig, RiskEngine
+
+    db, last = tmp_path / "t.db", CSVProvider().history("SYN_TECH")[-1].close
+    b = PaperBroker(db)
+    risk = RiskEngine(RiskConfig(trailing_stop=0.1))
+    b.execute(risk.check(Order("SYN_TECH", "buy", 10), b.begin_day("d0", {"SYN_TECH": last})), last, "d0")
+    b.set_meta("stop_highs", {"SYN_TECH": last * 1.5})  # as if an earlier tick saw a much higher close
+    b.conn.commit()
+    agent = Agent(CSVProvider(), PaperBroker(db), ["SYN_TECH"], get_strategy("combined"), risk, log=lambda _: None)
+    s = agent.tick()
+    assert [(o[0], o[1], o[3]) for o in s["orders"]] == [("SYN_TECH", "sell", 10)]
+    assert PaperBroker(db).rows("fills")[-1]["reason"].startswith("trailing stop")
+    assert PaperBroker(db).get_meta("stop_highs") == {}

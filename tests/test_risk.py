@@ -76,3 +76,20 @@ def test_liquidation_orders_after_kill():
     orders = r.liquidation_orders(s)
     assert {(o.symbol, o.side, o.qty) for o in orders} == {("A", "sell", 100), ("B", "sell", 10)}
     assert all(r.check(o, s).approved for o in orders)
+
+
+def test_trailing_stop_ratchets_and_fires():
+    r = RiskEngine(RiskConfig(trailing_stop=0.10))
+    assert r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 100.0})) == []
+    assert r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 120.0})) == []  # new high 120
+    assert r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 109.0})) == []  # -9.2%
+    [o] = r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 108.0}))        # -10%
+    assert (o.symbol, o.side, o.qty, o.source) == ("A", "sell", 10, "risk") and "trailing stop" in o.reason
+    r.trailing_stop_orders(state(positions={}, prices={"A": 108.0}))
+    assert r.stop_highs == {}  # forgotten once flat, so a re-entry starts a fresh high
+
+
+def test_trailing_stop_off_by_default():
+    r = RiskEngine()
+    r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 100.0}))
+    assert r.trailing_stop_orders(state(positions={"A": 10}, prices={"A": 1.0})) == []

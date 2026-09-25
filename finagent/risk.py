@@ -44,6 +44,7 @@ class RiskConfig:
     max_drawdown: float = 0.20        # peak-to-trough drawdown that trips the kill switch
     daily_loss_limit: float = 0.03    # stop opening risk after a 3% down day
     cost_buffer: float = 0.005        # headroom for slippage + commission when checking cash
+    trailing_stop: float = 0.0        # exit a long after it falls this fraction from its high close; 0 = off
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,7 @@ class RiskEngine:
     def __init__(self, config: RiskConfig | None = None):
         self.config = config or RiskConfig()
         self.killed = False  # latched once max drawdown is breached
+        self.stop_highs: dict[str, float] = {}  # highest close seen per open position (trailing stops)
 
     def size(self, equity: float, price: float, atr: float | None) -> int:
         """Shares to buy for a new entry, before caps."""
@@ -84,6 +86,28 @@ class RiskEngine:
     def liquidation_orders(self, state: PortfolioState) -> list[Order]:
         """Once halted, the policy is to flatten everything."""
         return [Order(s, "sell", q, "kill switch: flatten position", "risk") for s, q in state.positions.items() if q > 0]
+
+    def trailing_stop_orders(self, state: PortfolioState) -> list[Order]:
+        """Ratchet each long's high-water close and return full exits for positions that fell `trailing_stop` from it.
+
+        Call once per bar at the close. Highs of positions that are no longer held are forgotten.
+        """
+        # ponytail: tracks closes, not intraday highs/lows; an intraday stop model needs bar high/low per tick.
+        held = {s: q for s, q in state.positions.items() if q > 0}
+        self.stop_highs = {s: h for s, h in self.stop_highs.items() if s in held}
+        pct = self.config.trailing_stop
+        if pct <= 0:
+            return []
+        out = []
+        for s, q in held.items():
+            px = state.prices.get(s)
+            if px is None:
+                continue
+            hi = self.stop_highs[s] = max(self.stop_highs.get(s, px), px)
+            if px <= hi * (1 - pct):
+                out.append(Order(s, "sell", q, f"trailing stop: close {px:.2f} is {1 - px / hi:.1%} below "
+                                               f"high {hi:.2f} (limit {pct:.0%})", "risk"))
+        return out
 
     def check(self, order: Order, state: PortfolioState) -> RiskDecision:
         c, checks = self.config, []
