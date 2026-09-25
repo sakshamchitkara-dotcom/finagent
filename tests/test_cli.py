@@ -14,6 +14,7 @@ def test_cli_end_to_end(tmp_path, capsys, monkeypatch):
     assert main(["report", "--db", db, "--out", str(tmp_path / "r.html")]) == 0
     text = capsys.readouterr().out
     assert "PAPER TRADING ONLY" in text and "analyst: rule-based" in text and "sharpe" in text
+    assert "[finagent paper] 2023-10-30 mode=rules" in text
 
 
 def test_cli_live_provider_needs_symbols_and_uses_cache(tmp_path, capsys, monkeypatch):
