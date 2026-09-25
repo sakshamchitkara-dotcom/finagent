@@ -62,3 +62,28 @@ def test_get_strategy_returns_fresh_instances():
     assert get_strategy("combined").entry == Combined.entry
     with pytest.raises(ValueError, match="unknown strategy"):
         get_strategy("nope")
+
+
+def test_features_expose_prior_donchian_channel():
+    closes = [100.0] * 70 + [120.0]
+    f = features(_bars(closes))
+    assert f["high_55"] == pytest.approx(101.0) and f["low_20"] == pytest.approx(99.0)  # today excluded
+
+
+def test_breakout_enters_on_new_high_and_exits_on_channel_low():
+    from finagent.strategies import Breakout
+
+    b = Breakout()
+    up = b.signal(_f(close=110, high_55=105, low_20=95))
+    down = b.signal(_f(close=90, high_55=105, low_20=95))
+    inside = b.signal(_f(close=100, high_55=105, low_20=95))
+    assert up.score >= b.entry and down.score <= b.exit and b.exit < inside.score < b.entry
+    assert "55-day high" in up.reason and "20-day low" in down.reason
+
+
+def test_breakout_backtest_trades_only_on_channel_breaks():
+    from finagent.backtest import run_backtest
+
+    r = run_backtest(CSVProvider(), ["SYN_TECH", "SYN_INDEX"], get_strategy("breakout"), end="2021-12-31")
+    assert r.fills and all("55-day high" in f["reason"] for f in r.fills if f["side"] == "buy")
+    assert all("20-day low" in f["reason"] for f in r.fills if f["side"] == "sell" and f["source"] == "rules")
