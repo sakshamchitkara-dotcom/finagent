@@ -67,3 +67,12 @@ def test_invalid_orders_rejected():
     assert not r.check(Order("A", "buy", 0), state()).approved
     assert not r.check(Order("A", "buy", 1.5), state()).approved
     assert not r.check(Order("ZZZ", "buy", 1), state()).approved
+
+
+def test_liquidation_orders_after_kill():
+    r = RiskEngine(RiskConfig(max_drawdown=0.1))
+    s = state(positions={"A": 100, "B": 10}, cash=70_000, peak=100_000)
+    assert r.update(s)
+    orders = r.liquidation_orders(s)
+    assert {(o.symbol, o.side, o.qty) for o in orders} == {("A", "sell", 100), ("B", "sell", 10)}
+    assert all(r.check(o, s).approved for o in orders)

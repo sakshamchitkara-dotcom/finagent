@@ -72,6 +72,19 @@ class RiskEngine:
             return int(equity * c.risk_per_trade / (c.atr_multiple * atr))
         return int(equity * c.fixed_fraction / price)
 
+    def drawdown(self, state: PortfolioState) -> float:
+        return 1 - state.equity / state.peak_equity if state.peak_equity > 0 else 0.0
+
+    def update(self, state: PortfolioState) -> bool:
+        """Latch the kill switch if drawdown breached the limit. Returns True when trading is halted."""
+        if self.drawdown(state) >= self.config.max_drawdown:
+            self.killed = True
+        return self.killed
+
+    def liquidation_orders(self, state: PortfolioState) -> list[Order]:
+        """Once halted, the policy is to flatten everything."""
+        return [Order(s, "sell", q, "kill switch: flatten position", "risk") for s, q in state.positions.items() if q > 0]
+
     def check(self, order: Order, state: PortfolioState) -> RiskDecision:
         c, checks = self.config, []
         price = state.prices.get(order.symbol)
@@ -99,10 +112,8 @@ class RiskEngine:
             return reject(f"unknown side {order.side!r}")
 
         equity = state.equity
-        dd = 1 - equity / state.peak_equity if state.peak_equity > 0 else 0.0
-        if dd >= c.max_drawdown:
-            self.killed = True
-        if self.killed:
+        dd = self.drawdown(state)
+        if self.update(state):
             return reject(f"kill switch engaged (drawdown {dd:.1%}, limit {c.max_drawdown:.0%})")
         checks.append(f"ok: drawdown {dd:.1%} < {c.max_drawdown:.0%}")
 
