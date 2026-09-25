@@ -152,9 +152,10 @@ tick summary.
 ## CLI
 
 ```
-common:   [--provider csv|yahoo|stooq] [--data DIR] [--cache-dir data/cache] [--cache-hours 12]
+common:   [--provider csv|yahoo|stooq] [--data DIR] [--cache-dir data/cache] [--cache-hours 12] [--include-partial]
           [--symbols ...] [--strategy momentum|mean_reversion|combined|breakout] [--sizing atr|fixed] [--cash N]
-          [--trailing-stop F] [--stop-basis close|high] [--stop-loss F] [--take-profit F] [--max-sector-pct F] [--sectors map.json]
+          [--trailing-stop F] [--stop-basis close|high] [--stop-loss F] [--take-profit F]
+          [--max-sector-pct F] [--sectors map.json]
 
 finagent backtest    [--start D] [--end D] [--benchmark auto|SYMBOL|none] [--monte-carlo RUNS] [--seed N]
                      [--out reports/backtest]
@@ -163,8 +164,8 @@ finagent walkforward [--grid NAME=V1,V2 ...] [--train-days 504] [--test-days 126
                      [--out reports/walkforward.csv]
 finagent run         [--once | --interval SECONDS] [--db state/finagent.db] [--no-llm] [--model claude-opus-5-5]
                      [--webhook URL] [--notify-all] [--json]
-finagent portfolio   [--db ...] [--provider ...]
-finagent report      [--db ...] [--out reports/paper_report.html]
+finagent portfolio   [--db ...] [--provider ...]          # positions with stop/target/trailing exit levels
+finagent report      [--db ...] [--provider ...] [--out reports/paper_report.html]
 ```
 
 `backtest` writes `equity.csv`, `trades.csv`, `round_trips.csv`, `journal.csv` and `report.html`.
@@ -218,9 +219,56 @@ $ finagent run --once --provider yahoo --symbols SPY AAPL MSFT --trailing-stop 0
 On real large-cap data, the example strategies have lower drawdowns than SPY but trail buy-and-hold by a wide
 margin. In-sample Sharpe overstates what the walk-forward delivers out-of-sample.
 
+## Example output (v0.3.0 features, real data, 2026-09-25)
+
+Observed output, abridged. Breakout strategy with a stop-loss, trailing stop on intraday highs and a Monte Carlo
+pass over its trades (Yahoo bars fetched the same morning, served from the cache):
+
+```
+$ finagent backtest --provider yahoo --symbols SPY AAPL MSFT --start 2021-01-01 --strategy breakout \
+    --stop-loss 0.08 --trailing-stop 0.1 --stop-basis high --monte-carlo 2000
+Backtest breakout | SPY, AAPL, MSFT
+  total_return             8.90%       benchmark_total_return   120.69%   (SPY buy-and-hold)
+  sharpe                   0.31        benchmark_sharpe         0.92
+  max_drawdown             10.57%      benchmark_max_drawdown   24.50%
+  round_trips              43          profit_factor            1.40
+  avg_days_held            65.72       beta                     0.15
+  mc_return_p5             -7.09%      mc_prob_loss             18.50%
+  mc_return_p50            8.53%       mc_max_drawdown_p50      5.83%
+  mc_return_p95            23.97%      mc_max_drawdown_p95      12.43%
+```
+
+Resampling 43 trades gives roughly a one-in-five chance that the same trades, in another order and mix, would
+have lost money. Tuning the stops in-sample does not carry over cleanly:
+
+```
+$ finagent sweep --provider yahoo --symbols SPY AAPL MSFT --strategy breakout \
+    --grid stop_loss=0,0.05,0.1 --grid trailing_stop=0,0.1
+in-sample best: IS Sharpe 0.82 -> OOS Sharpe 0.74 (ranks 1/6 out-of-sample; IS/OOS rank correlation -0.09)
+WARNING: in-sample ranking does not carry over out-of-sample (rank correlation -0.09)
+
+$ finagent walkforward ... (same grid) --test-days 252
+  mean_is_sharpe 0.82 | mean_oos_sharpe 0.42 | oos_folds_profitable 62.50%
+  oos_total_return 24.73% | oos_sharpe 0.51 | benchmark SPY: total_return 197.25%, sharpe 0.80
+```
+
+A live paper tick, then a second tick on the same bar, then the book with its exit levels:
+
+```
+$ finagent run --once --provider yahoo --symbols SPY AAPL MSFT --stop-loss 0.08 --take-profit 0.3 --trailing-stop 0.1 --cache-hours 0
+[finagent paper] 2026-09-24 mode=rules equity=99,978.12 cash=60,212.16 | BUY SPY 26/75: filled buy 26 @ 767.56 (paper); BUY AAPL 59/71: filled buy 59 @ 336.09 (paper)
+$ finagent run --once ... (same flags)
+[finagent paper] 2026-09-24 mode=no new bar equity=99,978.12 cash=60,212.16 | no orders
+$ finagent portfolio --provider yahoo
+  AAPL  59 @ 336.09  last 335.92  value 19,819.28  P&L -9.91  weight 19.8%  exits: stop loss 309.20, take profit 436.91, trailing stop 302.33
+  SPY   26 @ 767.56  last 767.18  value 19,946.68  P&L -9.97  weight 20.0%  exits: stop loss 706.16, take profit 997.83, trailing stop 690.46
+```
+
 ## Limitations
 
-- Long-only, daily bars, a single currency, no corporate actions, no intraday risk.
+- Long-only, daily bars, a single currency, no corporate actions, no intraday risk. No pairs / stat-arb strategy:
+  it needs short legs, which the risk engine deliberately does not allow.
+- Monte Carlo resampling treats trades as independent and only sees trade-to-trade drawdown.
 - Fills are simulated at the next open (backtest) or the last close (live loop) plus fixed slippage. There is no order book or partial-fill model.
 - A tick whose latest bar and prices match the previous tick is a no-op (`mode=no new bar`), so re-running
   `run --once` on static data no longer re-trades the same bar. It is journalled as a skip.
