@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finagent"
+version = "0.1.0"
+description = "Autonomous paper-trading agent: indicators, strategies, risk engine, backtester, optional Claude analyst."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+llm = ["anthropic>=0.70"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+finagent = "finagent.cli:main"
+
+[tool.setuptools]
+packages = ["finagent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
