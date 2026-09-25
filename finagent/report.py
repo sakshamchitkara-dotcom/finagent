@@ -9,7 +9,8 @@ from .backtest import round_trips
 
 PCT = {"total_return", "cagr", "max_drawdown", "win_rate", "buy_hold_return", "benchmark_total_return",
        "benchmark_cagr", "benchmark_max_drawdown", "excess_return", "alpha", "trade_win_rate",
-       "avg_trade_return", "return", "weight"}
+       "avg_trade_return", "return", "weight", "mc_return_p5", "mc_return_p50",
+       "mc_return_p95", "mc_prob_loss", "mc_max_drawdown_p50", "mc_max_drawdown_p95"}
 
 
 def _fmt(k: str, v) -> str:

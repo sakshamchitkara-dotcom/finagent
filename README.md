@@ -120,6 +120,14 @@ excess return, beta, correlation and alpha. Fills are grouped into round trips (
 commission-inclusive P&L, return, holding period and exit reason, summarised as win rate, average win/loss,
 profit factor and expectancy. Both appear in the HTML report and `round_trips.csv`.
 
+### Monte Carlo trade resampling
+
+`finagent backtest --monte-carlo 2000 [--seed 0]` bootstraps the closed round trips: it redraws the same number of
+trades with replacement, in random order, 2000 times and reports the 5th/50th/95th percentile total return, the
+probability of ending with a loss and the median / 95th-percentile trade-to-trade drawdown. It answers "how much of
+this result was the lucky order of a few trades?". It assumes trades are independent (streaks are broken up) and
+ignores drawdown inside open trades, so treat the drawdown numbers as a floor.
+
 ### Overfitting guards: sweep and walk-forward
 
 `finagent sweep` backtests every combination in `--grid` (strategy `entry`/`exit` or any numeric
@@ -148,7 +156,8 @@ common:   [--provider csv|yahoo|stooq] [--data DIR] [--cache-dir data/cache] [--
           [--symbols ...] [--strategy momentum|mean_reversion|combined|breakout] [--sizing atr|fixed] [--cash N]
           [--trailing-stop F] [--stop-loss F] [--take-profit F] [--max-sector-pct F] [--sectors map.json]
 
-finagent backtest    [--start D] [--end D] [--benchmark auto|SYMBOL|none] [--out reports/backtest]
+finagent backtest    [--start D] [--end D] [--benchmark auto|SYMBOL|none] [--monte-carlo RUNS] [--seed N]
+                     [--out reports/backtest]
 finagent sweep       [--grid NAME=V1,V2 ...] [--split D] [--start D] [--end D] [--out reports/sweep.csv]
 finagent walkforward [--grid NAME=V1,V2 ...] [--train-days 504] [--test-days 126] [--benchmark ...]
                      [--out reports/walkforward.csv]

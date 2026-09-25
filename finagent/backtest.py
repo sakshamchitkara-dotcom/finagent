@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import math
+import random
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -156,6 +157,42 @@ def trade_stats(trips: list[dict]) -> dict:
         "avg_days_held": sum(t["days_held"] for t in closed) / n if n else 0.0,
         "best_trade": max((t["pnl"] for t in closed), default=0.0),
         "worst_trade": min((t["pnl"] for t in closed), default=0.0),
+    }
+
+
+def _pct(sorted_values: list[float], q: float) -> float:
+    return sorted_values[round(q * (len(sorted_values) - 1))]
+
+
+def monte_carlo(trips: list[dict], starting_cash: float, runs: int = 1000, seed: int = 0) -> dict:
+    """Bootstrap the closed round trips: draw the same number of trades with replacement, in random order, `runs`
+    times, and report the spread of outcomes the realised sequence was one draw from.
+
+    P&L is added in dollars to `starting_cash`, and drawdown is measured trade-to-trade (open-trade marks are not
+    part of the resample), so it understates intra-trade drawdown. Trades are assumed independent: streaks and
+    regime clustering in the real sequence are broken up.
+    """
+    pnls = [t["pnl"] for t in trips if t["pnl"] is not None]
+    if not pnls or runs <= 0:
+        return {}
+    rng = random.Random(seed)
+    finals, dds = [], []
+    for _ in range(runs):
+        eq = peak = starting_cash
+        mdd = 0.0
+        for x in rng.choices(pnls, k=len(pnls)):
+            eq += x
+            peak = max(peak, eq)
+            mdd = max(mdd, 1 - eq / peak if peak > 0 else 1.0)
+        finals.append(eq / starting_cash - 1)
+        dds.append(mdd)
+    finals.sort()
+    dds.sort()
+    return {
+        "mc_runs": runs,
+        "mc_return_p5": _pct(finals, 0.05), "mc_return_p50": _pct(finals, 0.5), "mc_return_p95": _pct(finals, 0.95),
+        "mc_prob_loss": sum(f < 0 for f in finals) / runs,
+        "mc_max_drawdown_p50": _pct(dds, 0.5), "mc_max_drawdown_p95": _pct(dds, 0.95),
     }
 
 

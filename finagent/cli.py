@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import llm, optimize
 from .agent import Agent
-from .backtest import compute_metrics, round_trips, run_backtest, trade_stats, write_csv
+from .backtest import compute_metrics, monte_carlo, round_trips, run_backtest, trade_stats, write_csv
 from .broker import PaperBroker
 from .data import (SAMPLE_DIR, CachedProvider, CSVProvider, DataUnavailable, FallbackProvider, StooqProvider,
                    YahooProvider)
@@ -104,6 +104,7 @@ def cmd_backtest(args) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
     _print_sources(provider)
+    res.metrics.update(monte_carlo(round_trips(res.fills), args.cash, args.monte_carlo, args.seed))
     out = Path(args.out)
     write_csv(res.equity, out / "equity.csv")
     write_csv(res.fills, out / "trades.csv")
@@ -311,6 +312,9 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--out", default="reports/backtest")
     bt.add_argument("--benchmark", default="auto",
                     help="buy-and-hold benchmark symbol; auto = SPY (live) / SYN_INDEX (sample); none disables")
+    bt.add_argument("--monte-carlo", type=int, default=0, metavar="RUNS",
+                    help="bootstrap the closed trades RUNS times and report return/drawdown percentiles")
+    bt.add_argument("--seed", type=int, default=0, help="random seed for --monte-carlo (default 0)")
     bt.set_defaults(fn=cmd_backtest)
 
     sw = sub.add_parser("sweep", parents=[common], help="parameter grid: in-sample vs out-of-sample results table")
