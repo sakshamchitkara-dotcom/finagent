@@ -113,6 +113,7 @@ class FallbackProvider:
             bars = self.primary.history(symbol)
             self.served_by[symbol] = type(self.primary).__name__
         except DataUnavailable as e:
+            self.served_by[symbol] = f"unavailable (primary failed: {e})"
             bars = self.fallback.history(symbol)
             self.served_by[symbol] = f"{type(self.fallback).__name__} (primary failed: {e})"
         return bars
