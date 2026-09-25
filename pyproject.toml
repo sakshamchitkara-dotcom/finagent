@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "finagent"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Autonomous paper-trading agent: indicators, strategies, risk engine, backtester, optional Claude analyst."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,6 +20,9 @@ finagent = "finagent.cli:main"
 
 [tool.setuptools]
 packages = ["finagent"]
+
+[tool.setuptools.dynamic]
+version = { attr = "finagent.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -178,3 +178,11 @@ def test_yahoo_provider_drops_partial_by_default(monkeypatch):
                         lambda req, timeout: _Resp(_live_chart(1704390000).encode(), "application/json"))
     assert YahooProvider().history("SPY")[-1].date == "2024-01-02"
     assert YahooProvider(include_partial=True).history("SPY")[-1].date == "2024-01-04"
+
+
+def test_user_agent_carries_the_package_version():
+    from importlib.metadata import version
+
+    import finagent
+
+    assert data.USER_AGENT.startswith(f"finagent/{finagent.__version__} ") and version("finagent") == finagent.__version__
