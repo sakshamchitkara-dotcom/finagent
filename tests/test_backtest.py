@@ -1,6 +1,7 @@
 import pytest
 
-from finagent.backtest import buy_and_hold, compute_metrics, relative_metrics, run_backtest
+from finagent.backtest import (buy_and_hold, compute_metrics, relative_metrics, round_trips, run_backtest,
+                               trade_stats)
 from finagent.data import Bar
 from finagent.data import CSVProvider
 from finagent.report import render_html
@@ -87,3 +88,32 @@ def test_backtest_reports_benchmark():
     assert [b["ts"] for b in r.benchmark] == [e["ts"] for e in r.equity]
     missing = run_backtest(p, ["SYN_TECH"], get_strategy("momentum"), end="2020-06-30", benchmark="NOPE")
     assert missing.benchmark is None and "unavailable" in missing.metrics["benchmark"]
+
+
+def _fill(ts, sym, side, qty, price, reason=""):
+    return {"ts": ts, "symbol": sym, "side": side, "qty": qty, "price": price, "commission": 1.0,
+            "realized_pnl": 0.0, "source": "rules", "reason": reason}
+
+
+def test_round_trips_scale_in_scale_out_and_open_positions():
+    fills = [_fill("2024-01-02", "A", "buy", 10, 10.0), _fill("2024-01-03", "B", "buy", 5, 20.0),
+             _fill("2024-01-05", "A", "buy", 10, 12.0), _fill("2024-01-08", "A", "sell", 5, 13.0),
+             _fill("2024-01-10", "A", "sell", 15, 14.0, "trailing stop: hit"),
+             _fill("2024-01-11", "A", "buy", 1, 15.0)]
+    trips = round_trips(fills)
+    a = trips[0]
+    assert (a["symbol"], a["entry"], a["exit"], a["qty"], a["days_held"]) == ("A", "2024-01-02", "2024-01-10", 20, 8)
+    assert a["avg_entry"] == pytest.approx(11.0) and a["avg_exit"] == pytest.approx(13.75)
+    assert a["pnl"] == pytest.approx(275 - 220 - 4) and a["exit_reason"] == "trailing stop: hit"
+    assert {(t["symbol"], t["exit"]) for t in trips[1:]} == {("B", "open"), ("A", "open")}
+    st = trade_stats(trips)
+    assert st["round_trips"] == 1 and st["open_trades"] == 2 and st["trade_win_rate"] == 1.0
+    assert st["profit_factor"] == float("inf") and st["expectancy"] == pytest.approx(51)
+
+
+def test_trade_stats_profit_factor():
+    fills = [_fill("2024-01-02", "A", "buy", 10, 10.0), _fill("2024-01-03", "A", "sell", 10, 13.0),
+             _fill("2024-01-04", "A", "buy", 10, 10.0), _fill("2024-01-05", "A", "sell", 10, 9.0)]
+    st = trade_stats(round_trips(fills))
+    assert st["avg_win"] == pytest.approx(28) and st["avg_loss"] == pytest.approx(-12)
+    assert st["profit_factor"] == pytest.approx(28 / 12) and st["trade_win_rate"] == 0.5

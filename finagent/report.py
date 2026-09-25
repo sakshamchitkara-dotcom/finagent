@@ -6,7 +6,8 @@ import html
 from pathlib import Path
 
 PCT = {"total_return", "cagr", "max_drawdown", "win_rate", "buy_hold_return", "benchmark_total_return",
-       "benchmark_cagr", "benchmark_max_drawdown", "excess_return", "alpha"}
+       "benchmark_cagr", "benchmark_max_drawdown", "excess_return", "alpha", "trade_win_rate",
+       "avg_trade_return", "return"}
 
 
 def _fmt(k: str, v) -> str:

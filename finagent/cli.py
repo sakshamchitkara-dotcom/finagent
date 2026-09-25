@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import llm
 from .agent import Agent
-from .backtest import compute_metrics, run_backtest, write_csv
+from .backtest import compute_metrics, round_trips, run_backtest, trade_stats, write_csv
 from .broker import PaperBroker
 from .data import (SAMPLE_DIR, CachedProvider, CSVProvider, DataUnavailable, FallbackProvider, StooqProvider,
                    YahooProvider)
@@ -86,11 +86,12 @@ def cmd_backtest(args) -> int:
     write_csv(res.equity, out / "equity.csv")
     write_csv(res.fills, out / "trades.csv")
     write_csv(res.journal, out / "journal.csv")
+    write_csv(round_trips(res.fills), out / "round_trips.csv")
     report = write_report(out / "report.html", f"Backtest: {args.strategy} on {', '.join(symbols)}",
                           res.equity, res.metrics, res.fills, note=_data_note(args))
     print(f"Backtest {args.strategy} | {', '.join(symbols)}")
     _print_metrics(res.metrics)
-    print(f"wrote {out / 'equity.csv'}, {out / 'trades.csv'}, {out / 'journal.csv'}, {report}")
+    print(f"wrote {out}/{{equity,trades,round_trips,journal}}.csv and {report}")
     return 0
 
 
@@ -146,6 +147,7 @@ def cmd_report(args) -> int:
     b = PaperBroker(args.db)
     eq, fills = b.rows("equity"), b.rows("fills")
     metrics = compute_metrics([r["equity"] for r in eq], fills, b.starting_cash)
+    metrics.update(trade_stats(round_trips(fills)))
     path = write_report(Path(args.out), "finagent paper account", eq, metrics, fills, b.rows("journal"),
                         note=f"State from {args.db}.")
     print(f"wrote {path} ({len(eq)} equity points, {len(fills)} fills)")
