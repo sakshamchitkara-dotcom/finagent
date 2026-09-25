@@ -74,6 +74,7 @@ Every order, whether it comes from the rule-based policy or from Claude, passes 
 | Cash check | no margin; 0.5% headroom for costs |
 | Daily loss limit | no new buys after a 3% down day |
 | Max drawdown kill switch | at 20% from peak: latch, block buys, flatten all positions. The latch persists across restarts |
+| Regime filter | off by default; `--regime-filter SPY` blocks new buys while SPY closes below its 200-day SMA (`--regime-sma`) |
 | Shorting | disabled; sells are clipped to the held quantity |
 
 Sells always pass (they reduce risk), including while halted.
@@ -155,7 +156,7 @@ tick summary.
 common:   [--provider csv|yahoo|stooq] [--data DIR] [--cache-dir data/cache] [--cache-hours 12] [--include-partial]
           [--symbols ...] [--strategy momentum|mean_reversion|combined|breakout] [--sizing atr|fixed] [--cash N]
           [--trailing-stop F] [--stop-basis close|high] [--stop-loss F] [--take-profit F]
-          [--max-sector-pct F] [--sectors map.json]
+          [--max-sector-pct F] [--sectors map.json] [--regime-filter SYMBOL] [--regime-sma 200]
 
 finagent backtest    [--start D] [--end D] [--benchmark auto|SYMBOL|none] [--monte-carlo RUNS] [--seed N]
                      [--out reports/backtest]
@@ -164,11 +165,14 @@ finagent walkforward [--grid NAME=V1,V2 ...] [--train-days 504] [--test-days 126
                      [--out reports/walkforward.csv]
 finagent run         [--once | --interval SECONDS] [--db state/finagent.db] [--no-llm] [--model claude-opus-5-5]
                      [--webhook URL] [--notify-all] [--json]
+finagent compare     A B [--all]                          # two backtest --out dirs (or metrics.json) side by side
 finagent portfolio   [--db ...] [--provider ...]          # positions with stop/target/trailing exit levels
 finagent report      [--db ...] [--provider ...] [--out reports/paper_report.html]
 ```
 
-`backtest` writes `equity.csv`, `trades.csv`, `round_trips.csv`, `journal.csv` and `report.html`.
+`backtest` writes `equity.csv`, `trades.csv`, `round_trips.csv`, `journal.csv`, `metrics.json` (run config + metrics,
+read by `compare`) and `report.html`. `run --cash` only seeds a new `--db` account; on an existing one it is ignored
+with a warning.
 
 ## Example output (synthetic data)
 

@@ -2,6 +2,23 @@
 
 All notable changes to finagent. Paper trading only: no release adds real order placement.
 
+## [0.4.0] - 2026-09-25
+
+### Added
+- Market regime filter: `--regime-filter SPY [--regime-sma 200]` blocks new buys while the regime symbol closes
+  below its moving average (too little history counts as risk off). Sells, stops and the kill switch still run.
+  The backtest uses the regime close before the fill day (no look-ahead); `regime_sma` can be swept in a `--grid`.
+- `backtest` writes `metrics.json`: version, timestamp, the full run configuration and every metric.
+- `finagent compare A B`: side-by-side metrics of two saved backtests with their config differences.
+
+### Fixed
+- `run --cash` on an existing paper account is no longer silently ignored: a warning names the account's real
+  starting cash.
+
+### Performance
+- Sweeps and walk-forward runs share indicator snapshots across grid combinations and folds: on the sample data
+  the default sweep takes 1.7s instead of 7.1s and walk-forward 2.5s instead of 23.2s, with identical output.
+
 ## [0.3.1] - 2026-09-25
 
 ### Fixed
