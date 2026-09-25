@@ -7,6 +7,24 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 
+# Symbol -> sector for the sector exposure cap. Symbols not listed are not sector-capped.
+# Broad index ETFs share one bucket so the agent cannot stack SPY + QQQ + VOO as "diversification".
+DEFAULT_SECTORS = {
+    "SPY": "index", "VOO": "index", "IVV": "index", "QQQ": "index", "DIA": "index", "IWM": "index", "VTI": "index",
+    "AAPL": "tech", "MSFT": "tech", "NVDA": "tech", "GOOGL": "tech", "GOOG": "tech", "META": "tech", "AVGO": "tech",
+    "AMD": "tech", "ORCL": "tech", "CRM": "tech", "INTC": "tech", "XLK": "tech",
+    "AMZN": "consumer", "TSLA": "consumer", "HD": "consumer", "MCD": "consumer", "NKE": "consumer",
+    "WMT": "staples", "PG": "staples", "KO": "staples", "PEP": "staples", "COST": "staples",
+    "JPM": "financials", "BAC": "financials", "WFC": "financials", "GS": "financials", "MS": "financials",
+    "V": "financials", "MA": "financials", "BRK-B": "financials", "XLF": "financials",
+    "XOM": "energy", "CVX": "energy", "COP": "energy", "XLE": "energy",
+    "JNJ": "health", "UNH": "health", "LLY": "health", "PFE": "health", "MRK": "health", "ABBV": "health",
+    "NEE": "utilities", "DUK": "utilities", "SO": "utilities", "XLU": "utilities",
+    "SYN_TECH": "tech", "SYN_BANK": "financials", "SYN_ENERGY": "energy", "SYN_UTIL": "utilities",
+    "SYN_INDEX": "index",
+}
+
+
 @dataclass
 class Order:
     symbol: str
@@ -45,6 +63,8 @@ class RiskConfig:
     daily_loss_limit: float = 0.03    # stop opening risk after a 3% down day
     cost_buffer: float = 0.005        # headroom for slippage + commission when checking cash
     trailing_stop: float = 0.0        # exit a long after it falls this fraction from its high close; 0 = off
+    max_sector_pct: float = 0.40      # total long exposure per sector, fraction of equity
+    sectors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_SECTORS))
 
 
 @dataclass(frozen=True)
@@ -152,6 +172,11 @@ class RiskEngine:
             "gross exposure": (c.max_gross_exposure * equity - state.gross_exposure) / price,
             "available cash": state.cash / (price * (1 + c.cost_buffer)),
         }
+        sector = c.sectors.get(order.symbol)
+        if sector:
+            in_sector = sum(q * state.prices[s] for s, q in state.positions.items()
+                            if q > 0 and c.sectors.get(s) == sector)
+            caps[f"sector '{sector}' exposure"] = (c.max_sector_pct * equity - in_sector) / price
         for name, cap in caps.items():
             cap = max(0, math.floor(cap))
             if qty > cap:
