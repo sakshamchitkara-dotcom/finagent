@@ -1,3 +1,5 @@
+import pytest
+
 from finagent.risk import Order, PortfolioState, RiskConfig, RiskEngine
 
 
@@ -110,3 +112,24 @@ def test_default_sectors_group_index_etfs():
     from finagent.risk import DEFAULT_SECTORS
 
     assert DEFAULT_SECTORS["SPY"] == DEFAULT_SECTORS["QQQ"] and DEFAULT_SECTORS["AAPL"] == DEFAULT_SECTORS["MSFT"]
+
+
+def test_correlation():
+    from finagent.risk import correlation
+
+    a = [0.01, -0.02, 0.03, 0.0, -0.01] * 5
+    assert correlation(a, [2 * x for x in a]) == pytest.approx(1)
+    assert correlation(a, [-x for x in a]) == pytest.approx(-1)
+    assert correlation(a[:10], a[:10]) == 0.0  # too few observations
+
+
+def test_correlated_exposure_cap():
+    a = [0.01, -0.02, 0.03, 0.0, -0.01] * 6
+    noise = [0.02, 0.01, -0.03, 0.02, -0.02, 0.0] * 5
+    cfg = RiskConfig(sectors={}, max_correlated_pct=0.3)
+    s = state(cash=80_000, positions={"B": 400}, prices={"A": 100.0, "B": 50.0})  # 20k in B
+    s.returns = {"A": a, "B": [x * 1.5 for x in a]}
+    d = RiskEngine(cfg).check(Order("A", "buy", 1000), s)
+    assert d.qty == 100 and any("correlated with B (1.00)" in c for c in d.checks)  # 30k - 20k
+    s.returns["B"] = noise
+    assert RiskEngine(cfg).check(Order("A", "buy", 1000), s).qty == 200  # uncorrelated: only the 20% cap
