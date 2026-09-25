@@ -157,3 +157,13 @@ def test_monte_carlo_is_seeded_and_brackets_the_mean():
     assert monte_carlo([{"pnl": None}], 10_000) == {} and monte_carlo(trips, 10_000, runs=0) == {}
     sure = monte_carlo([{"pnl": 10.0}] * 5, 1_000, runs=50)
     assert sure["mc_prob_loss"] == 0 and sure["mc_max_drawdown_p95"] == 0 and sure["mc_return_p5"] == pytest.approx(0.05)
+
+
+def test_report_escapes_untrusted_text_and_handles_short_history():
+    evil = '<script>alert(1)</script>'
+    journal = [{"ts": "t", "symbol": "A", "source": "llm", "action": "buy", "requested_qty": 1, "approved_qty": 1,
+                "outcome": "ok", "rationale": evil}]  # LLM rationale is model output: must never become markup
+    fills = [_fill("2024-01-02", "A", "buy", 1, 10.0, evil), _fill("2024-01-03", "A", "sell", 1, 11.0, evil)]
+    page = render_html(evil, [{"ts": "2024-01-02", "equity": 1.0}], {"note": evil}, fills, journal, note=evil)
+    assert "<script>" not in page and "&lt;script&gt;" in page
+    assert "Not enough equity history to chart yet" in page
