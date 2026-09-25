@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -93,6 +95,12 @@ def parse_csv(text: str) -> list[Bar]:
     return bars
 
 
+def bars_to_csv(bars: list[Bar]) -> str:
+    rows = ["date,open,high,low,close,volume"]
+    rows += [f"{b.date},{b.open!r},{b.high!r},{b.low!r},{b.close!r},{b.volume!r}" for b in bars]
+    return "\n".join(rows) + "\n"
+
+
 class CSVProvider:
     """Reads `<dir>/<SYMBOL>.csv`."""
 
@@ -173,6 +181,43 @@ class YahooProvider:
         return parse_yahoo_chart(http_get(url, f"yahoo {symbol}", self.timeout), symbol, self.adjust)
 
 
+class CachedProvider:
+    """Disk cache in front of a network provider: `<dir>/<source>_<SYMBOL>.csv`.
+
+    Fresh files (younger than `max_age_hours`) are served without a request. When the live fetch fails,
+    a stale cached copy is served instead of failing, and `served_by` says so.
+    """
+
+    def __init__(self, inner: DataProvider, cache_dir: str | Path = "data/cache", max_age_hours: float = 12.0):
+        self.inner, self.dir, self.max_age = inner, Path(cache_dir), max_age_hours * 3600
+        self.source = type(inner).__name__.lower().removesuffix("provider")
+        self.served_by: dict[str, str] = {}
+
+    def path(self, symbol: str) -> Path:
+        safe = "".join(ch if ch.isalnum() or ch in "-._^=" else "_" for ch in symbol.upper())
+        return self.dir / f"{self.source}_{safe}.csv"
+
+    def history(self, symbol: str) -> list[Bar]:
+        path = self.path(symbol)
+        age = time.time() - path.stat().st_mtime if path.exists() else None
+        if age is not None and age < self.max_age:
+            self.served_by[symbol] = f"{self.source} (cache, {age / 3600:.1f}h old)"
+            return parse_csv(path.read_text())
+        try:
+            bars = self.inner.history(symbol)
+        except DataUnavailable as e:
+            if age is None:
+                raise
+            self.served_by[symbol] = f"{self.source} (STALE cache, {age / 3600:.1f}h old; live failed: {e})"
+            return parse_csv(path.read_text())
+        self.dir.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(bars_to_csv(bars))
+        os.replace(tmp, path)  # atomic: a crash never leaves a half-written cache file
+        self.served_by[symbol] = f"{self.source} (live, cached {len(bars)} bars)"
+        return bars
+
+
 class FallbackProvider:
     """Try `primary`, fall back to `fallback` on DataUnavailable. Records which one served each symbol."""
 
@@ -183,9 +228,13 @@ class FallbackProvider:
     def history(self, symbol: str) -> list[Bar]:
         try:
             bars = self.primary.history(symbol)
-            self.served_by[symbol] = type(self.primary).__name__
+            detail = getattr(self.primary, "served_by", {}).get(symbol)
+            self.served_by[symbol] = detail or type(self.primary).__name__
         except DataUnavailable as e:
             self.served_by[symbol] = f"unavailable (primary failed: {e})"
-            bars = self.fallback.history(symbol)
+            try:
+                bars = self.fallback.history(symbol)
+            except DataUnavailable as e2:
+                raise DataUnavailable(f"{symbol}: primary failed ({e}); fallback failed ({e2})") from e2
             self.served_by[symbol] = f"{type(self.fallback).__name__} (primary failed: {e})"
         return bars
