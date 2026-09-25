@@ -2,6 +2,31 @@
 
 All notable changes to finagent. Paper trading only: no release adds real order placement.
 
+## [0.3.0] - 2026-09-25
+
+### Added
+- `breakout` strategy: Donchian channel trend following (enter above the prior 55-day high, exit below the prior
+  20-day low); `features()` exposes `high_55` / `low_20`.
+- Position-level exits: `--stop-loss` and `--take-profit` against the average entry price, sharing one exit pass
+  with the trailing stop (at most one exit per symbol). Both can be tuned in `sweep` / `walkforward` grids.
+- `--stop-basis high`: ratchet the trailing stop on intraday highs instead of closes.
+- Exit levels in reports: backtest and paper-account reports and `finagent portfolio` list open positions with
+  their stop-loss, take-profit and trailing-stop prices; positions without a current price are flagged.
+- `backtest --monte-carlo RUNS [--seed N]`: bootstrap of closed round trips with return and drawdown percentiles
+  and the probability of a loss.
+- `--include-partial`: keep Yahoo's in-progress bar for intraday ticks (always refetches).
+- Tests for strategies, agent degraded-data paths and run loop, CLI sweep/walkforward/validation, report escaping.
+
+### Changed
+- Yahoo's in-progress daily bar is dropped by default during market hours (detected from Yahoo's session clock).
+- A tick that sees the same bar and prices as the previous one is a journalled no-op (`mode=no new bar`).
+- `RiskEngine.trailing_stop_orders` is now `RiskEngine.exit_orders`; `PortfolioState` carries `costs` and `highs`.
+- `report` accepts the data-provider options (to price open positions).
+- The version is single-sourced from `finagent.__version__` and sent in the data User-Agent.
+
+### Fixed
+- Sweep IS/OOS rank correlation averages tied ranks; all-tied grids no longer report a spurious -1.00 and warning.
+
 ## [0.2.0] - 2026-09-25
 
 ### Added
