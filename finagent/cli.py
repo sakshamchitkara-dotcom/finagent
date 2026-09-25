@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import llm
+from . import llm, optimize
 from .agent import Agent
 from .backtest import compute_metrics, round_trips, run_backtest, trade_stats, write_csv
 from .broker import PaperBroker
@@ -108,6 +108,57 @@ def cmd_backtest(args) -> int:
     return 0
 
 
+def _print_table(rows: list[dict], cols: list[str]) -> None:
+    def cell(k, v):
+        if isinstance(v, float):
+            return f"{v:.2%}" if k.split("_", 1)[-1] in PCT else f"{v:.2f}"
+        return str(v)
+
+    table = [[cell(c, r.get(c, "")) for c in cols] for r in rows]
+    widths = [max(len(c), *(len(t[i]) for t in table)) for i, c in enumerate(cols)]
+    print("  ".join(c.rjust(w) for c, w in zip(cols, widths)))
+    for t in table:
+        print("  ".join(v.rjust(w) for v, w in zip(t, widths)))
+
+
+DEFAULT_GRID = ["entry=0.2,0.3,0.4", "exit=-0.2,-0.1"]
+
+
+def _grid(args) -> dict[str, list[float]]:
+    try:
+        return optimize.parse_grid(args.grid or DEFAULT_GRID)
+    except ValueError as e:
+        sys.exit(f"--grid: {e}")
+
+
+def _print_overfit(check: dict) -> None:
+    print(f"in-sample best: IS Sharpe {check['best_is_sharpe']:.2f} -> OOS Sharpe {check['best_oos_sharpe']:.2f}"
+          f" (ranks {check['oos_rank_of_is_best']} out-of-sample; IS/OOS rank correlation "
+          f"{check['is_oos_rank_correlation']:+.2f})")
+    for w in check["warnings"]:
+        print(f"WARNING: {w}")
+    if not check["warnings"]:
+        print("no overfitting red flags (which is not proof of an edge)")
+
+
+def cmd_sweep(args) -> int:
+    provider, symbols, grid = _provider(args), _symbols(args), _grid(args)
+    print(f"Sweep {args.strategy} | {', '.join(symbols)} | {len(optimize.combos(grid))} combinations")
+    try:
+        rows = optimize.sweep(provider, symbols, args.strategy, grid, args.split, args.start, args.end,
+                              _risk_config(args), args.cash)
+    except (DataUnavailable, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    _print_sources(provider)
+    print(f"in-sample < {rows[0]['split']} <= out-of-sample; sorted by in-sample Sharpe (selection uses IS only)")
+    _print_table(rows, list(grid) + [f"{p}_{k}" for p in ("is", "oos") for k in optimize.REPORTED])
+    _print_overfit(optimize.overfit_check(rows))
+    write_csv(rows, Path(args.out))
+    print(f"wrote {args.out}")
+    return 0
+
+
 def cmd_run(args) -> int:
     provider = _provider(args)
     symbols = _symbols(args)
@@ -197,6 +248,15 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--benchmark", default="auto",
                     help="buy-and-hold benchmark symbol; auto = SPY (live) / SYN_INDEX (sample); none disables")
     bt.set_defaults(fn=cmd_backtest)
+
+    sw = sub.add_parser("sweep", parents=[common], help="parameter grid: in-sample vs out-of-sample results table")
+    sw.add_argument("--grid", action="append", metavar="NAME=V1,V2",
+                    help=f"repeatable; strategy entry/exit or any numeric RiskConfig field (default {DEFAULT_GRID})")
+    sw.add_argument("--split", help="first out-of-sample date (default: 70%% through the data)")
+    sw.add_argument("--start")
+    sw.add_argument("--end")
+    sw.add_argument("--out", default="reports/sweep.csv")
+    sw.set_defaults(fn=cmd_sweep)
 
     run = sub.add_parser("run", parents=[common], help="run the autonomous paper-trading loop")
     run.add_argument("--once", action="store_true", help="single tick, then exit")
