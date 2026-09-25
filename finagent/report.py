@@ -9,7 +9,7 @@ from .backtest import round_trips
 
 PCT = {"total_return", "cagr", "max_drawdown", "win_rate", "buy_hold_return", "benchmark_total_return",
        "benchmark_cagr", "benchmark_max_drawdown", "excess_return", "alpha", "trade_win_rate",
-       "avg_trade_return", "return"}
+       "avg_trade_return", "return", "weight"}
 
 
 def _fmt(k: str, v) -> str:
@@ -84,7 +84,8 @@ def _by_symbol(trips: list[dict]) -> list[dict]:
 
 
 def render_html(title: str, equity: list[dict], metrics: dict, fills: list[dict],
-                journal: list[dict] | None = None, note: str = "", benchmark: list[dict] | None = None) -> str:
+                journal: list[dict] | None = None, note: str = "", benchmark: list[dict] | None = None,
+                positions: list[dict] | None = None) -> str:
     metric_rows = "".join(f"<tr><th>{html.escape(k)}</th><td>{_fmt(k, v)}</td></tr>" for k, v in metrics.items())
     trips = round_trips(fills)
     closed = [t for t in trips if t["pnl"] is not None]
@@ -94,6 +95,11 @@ def render_html(title: str, equity: list[dict], metrics: dict, fills: list[dict]
         + f"<h2>Round-trip trades (latest 100 of {len(closed)} closed)</h2>"
         + _table(trips[-100:][::-1], ["symbol", "entry", "exit", "qty", "avg_entry", "avg_exit", "pnl", "return",
                                       "days_held", "exit_reason"]))
+    positions_html = ""
+    if positions is not None:
+        positions_html = "<h2>Open positions and exit levels</h2>" + _table(positions, [
+            "symbol", "qty", "avg_entry", "last", "value", "unrealized_pnl", "weight", "stop_loss", "take_profit",
+            "trailing_stop"])
     journal_html = ""
     if journal is not None:
         journal_html = "<h2>Decision journal (latest 100)</h2>" + _table(
@@ -121,6 +127,7 @@ th, td {{ border-bottom:1px solid var(--line); padding:4px 8px; text-align:left;
 {equity_svg([r["ts"] for r in equity], [r["equity"] for r in equity],
             bench=[r["equity"] for r in benchmark] if benchmark else None,
             bench_label=str(metrics.get("benchmark", "benchmark")))}
+{positions_html}
 <h2>Metrics</h2><table>{metric_rows}</table>
 {trips_html}
 <h2>Fills (latest 100)</h2>

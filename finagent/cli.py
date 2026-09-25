@@ -16,7 +16,7 @@ from .data import (SAMPLE_DIR, CachedProvider, CSVProvider, DataUnavailable, Fal
                    YahooProvider)
 from .notify import Notifier
 from .report import PCT, write_report
-from .risk import RiskConfig, RiskEngine
+from .risk import PortfolioState, RiskConfig, RiskEngine
 from .strategies import STRATEGIES, get_strategy
 
 DISCLAIMER = "PAPER TRADING ONLY. Not financial advice. finagent never places real orders."
@@ -110,7 +110,8 @@ def cmd_backtest(args) -> int:
     write_csv(res.journal, out / "journal.csv")
     write_csv(round_trips(res.fills), out / "round_trips.csv")
     report = write_report(out / "report.html", f"Backtest: {args.strategy} on {', '.join(symbols)}",
-                          res.equity, res.metrics, res.fills, note=_data_note(args), benchmark=res.benchmark)
+                          res.equity, res.metrics, res.fills, note=_data_note(args), benchmark=res.benchmark,
+                          positions=res.positions)
     print(f"Backtest {args.strategy} | {', '.join(symbols)}")
     _print_metrics(res.metrics)
     print(f"wrote {out}/{{equity,trades,round_trips,journal}}.csv and {report}")
@@ -226,24 +227,37 @@ def cmd_run(args) -> int:
     return 0
 
 
-def cmd_portfolio(args) -> int:
-    b = PaperBroker(args.db)
-    positions = b.positions()
-    provider, prices = _provider(args), {}
+def _paper_book(b: PaperBroker, args) -> tuple[dict[str, float], list[dict], list[str]]:
+    """Latest prices, open positions with exit levels, and the symbols that had to be marked at cost."""
+    positions, provider, prices, at_cost = b.positions(), _provider(args), {}, []
     for s in positions:
         try:
             prices[s] = provider.history(s)[-1].close
         except DataUnavailable:
-            prices[s] = positions[s][1]  # fall back to cost
+            prices[s] = positions[s][1]
+            at_cost.append(s)
+    risk = RiskEngine(RiskConfig(**(b.get_meta("exit_config") or {})))
+    risk.stop_highs = b.get_meta("stop_highs") or {}
+    state = PortfolioState(b.cash, {s: q for s, (q, _) in positions.items()}, prices, 0.0, 0.0,
+                           costs={s: a for s, (_, a) in positions.items()})  # read-only: no begin_day side effects
+    return prices, risk.levels(state), at_cost
+
+
+def cmd_portfolio(args) -> int:
+    b = PaperBroker(args.db)
+    prices, rows, at_cost = _paper_book(b, args)
     eq = b.equity(prices)
     print(f"cash      {b.cash:>14,.2f}")
     print(f"equity    {eq:>14,.2f}   (start {b.starting_cash:,.2f}, {eq / b.starting_cash - 1:+.2%})")
     print(f"kill switch: {'ENGAGED' if b.get_meta('killed') else 'off'}")
-    for s, (q, avg) in positions.items():
-        px = prices[s]
-        print(f"  {s:<12} {q:>8} @ {avg:>10.2f}  last {px:>10.2f}  value {q * px:>12,.2f}  "
-              f"P&L {(px - avg) * q:>+12,.2f}  weight {q * px / eq:.1%}")
-    if not positions:
+    for r in rows:
+        exits = ", ".join(f"{k.replace('_', ' ')} {r[k]:.2f}" for k in ("stop_loss", "take_profit", "trailing_stop")
+                          if r[k] is not None)
+        print(f"  {r['symbol']:<12} {r['qty']:>8} @ {r['avg_entry']:>10.2f}  last {r['last']:>10.2f}  "
+              f"value {r['value']:>12,.2f}  P&L {r['unrealized_pnl']:>+12,.2f}  weight {r['weight']:.1%}"
+              + ("  (NO PRICE: marked at cost)" if r["symbol"] in at_cost else "")
+              + (f"  exits: {exits}" if exits else ""))
+    if not rows:
         print("  (no positions)")
     return 0
 
@@ -253,9 +267,11 @@ def cmd_report(args) -> int:
     eq, fills = b.rows("equity"), b.rows("fills")
     metrics = compute_metrics([r["equity"] for r in eq], fills, b.starting_cash)
     metrics.update(trade_stats(round_trips(fills)))
+    _, positions, at_cost = _paper_book(b, args)
+    note = f"State from {args.db}." + (f" No current price for {', '.join(at_cost)}: marked at cost." if at_cost else "")
     path = write_report(Path(args.out), "finagent paper account", eq, metrics, fills, b.rows("journal"),
-                        note=f"State from {args.db}.")
-    print(f"wrote {path} ({len(eq)} equity points, {len(fills)} fills)")
+                        note=note, positions=positions)
+    print(f"wrote {path} ({len(eq)} equity points, {len(fills)} fills, {len(positions)} open positions)")
     return 0
 
 
@@ -332,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
     pf.add_argument("--db", default=DEFAULT_DB)
     pf.set_defaults(fn=cmd_portfolio)
 
-    rp = sub.add_parser("report", help="HTML report of the paper account")
+    rp = sub.add_parser("report", parents=[data], help="HTML report of the paper account")
     rp.add_argument("--db", default=DEFAULT_DB)
     rp.add_argument("--out", default="reports/paper_report.html")
     rp.set_defaults(fn=cmd_report)

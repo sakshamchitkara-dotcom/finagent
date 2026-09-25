@@ -156,6 +156,23 @@ class RiskEngine:
                 out.append(Order(s, "sell", q, why, "risk"))
         return out
 
+    def levels(self, state: PortfolioState) -> list[dict]:
+        """Open longs with the price levels at which exit_orders() would sell them (None where a rule is off)."""
+        c, eq, out = self.config, state.equity, []
+        for s, q in sorted(state.positions.items()):
+            if q <= 0:
+                continue
+            px, cost = state.prices[s], state.costs.get(s)
+            hi = max(self.stop_highs.get(s, px), px)
+            out.append({
+                "symbol": s, "qty": q, "avg_entry": cost, "last": px, "value": q * px,
+                "unrealized_pnl": (px - cost) * q if cost else None, "weight": q * px / eq if eq > 0 else 0.0,
+                "stop_loss": cost * (1 - c.stop_loss) if cost and c.stop_loss > 0 else None,
+                "take_profit": cost * (1 + c.take_profit) if cost and c.take_profit > 0 else None,
+                "trailing_stop": hi * (1 - c.trailing_stop) if c.trailing_stop > 0 else None,
+            })
+        return out
+
     def check(self, order: Order, state: PortfolioState) -> RiskDecision:
         c, checks = self.config, []
         price = state.prices.get(order.symbol)
