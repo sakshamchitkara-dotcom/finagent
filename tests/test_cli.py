@@ -89,3 +89,24 @@ def test_cli_benchmark_none_and_custom_sectors(tmp_path, capsys):
     assert "benchmark_total_return" not in (out := capsys.readouterr().out) and "beta" not in out
     journal = (tmp_path / "bt" / "journal.csv").read_text()
     assert "sector 'tech' exposure" in journal  # the lowercase key was normalised and the 20% cap bit
+
+
+@pytest.mark.parametrize("argv, match", [
+    (["backtest", "--stop-loss", "1.5"], "not a fraction"),
+    (["backtest", "--trailing-stop", "-0.1"], "not a fraction"),
+    (["backtest", "--take-profit", "-1"], "0 or more"),
+    (["backtest", "--cash", "0"], "greater than 0"),
+    (["backtest", "--monte-carlo", "-5"], "0 or more"),
+    (["backtest", "--start", "2021/01/31"], "not a date"),
+    (["sweep", "--split", "soon"], "not a date"),
+    (["run", "--interval", "0"], "greater than 0"),
+])
+def test_cli_rejects_out_of_range_arguments(argv, match, capsys):
+    with pytest.raises(SystemExit):
+        main(argv)
+    assert match in capsys.readouterr().err
+
+
+def test_cli_backtest_reports_an_empty_date_range_without_a_traceback(tmp_path, capsys):
+    assert main(["backtest", "--start", "2030-01-01", "--out", str(tmp_path / "bt")]) == 2
+    assert "no data in the requested date range" in capsys.readouterr().err
