@@ -110,3 +110,15 @@ def test_cli_rejects_out_of_range_arguments(argv, match, capsys):
 def test_cli_backtest_reports_an_empty_date_range_without_a_traceback(tmp_path, capsys):
     assert main(["backtest", "--start", "2030-01-01", "--out", str(tmp_path / "bt")]) == 2
     assert "no data in the requested date range" in capsys.readouterr().err
+
+
+def test_run_warns_when_cash_is_ignored_for_an_existing_account(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    db = str(tmp_path / "s.db")
+    assert main(["run", "--once", "--db", db, "--cash", "50000"]) == 0
+    assert "WARNING" not in capsys.readouterr().err  # new account: --cash is used
+    assert main(["run", "--once", "--db", db]) == 0
+    assert "WARNING" not in capsys.readouterr().err  # --cash not given: nothing to warn about
+    assert main(["run", "--once", "--db", db, "--cash", "250000"]) == 0
+    err = capsys.readouterr().err
+    assert "--cash 250,000.00 ignored" in err and "started with 50,000.00" in err
