@@ -66,6 +66,17 @@ class Agent:
             if s not in prices:
                 raise DataUnavailable(f"no price for held position {s}; refusing to trade on a partial view")
 
+        # Same bar and same prices as the last completed tick: nothing new to decide on. Re-running would
+        # re-journal identical decisions and, for LLM mode, pay for the same answer twice.
+        seen = {"as_of": as_of, "prices": prices}
+        if b.get_meta("last_bar") == seen:
+            b.journal(now, "*", "observe", "skip", 0, None, f"no new data since the last tick (bar {as_of})",
+                      "no new bar")
+            summary = {"ts": now, "as_of": as_of, "mode": "no new bar", "orders": [],
+                       "equity": round(b.equity(prices), 2), "cash": round(b.cash, 2), "killed": self.risk.killed}
+            self.log(summary)
+            return summary
+
         # analyze
         signals = {s: self.strategy.signal(f) for s, f in feats.items()}
         state = b.begin_day(as_of, prices)
@@ -124,6 +135,7 @@ class Agent:
         b.set_meta("killed", self.risk.killed)
         held = b.positions()
         b.set_meta("stop_highs", {s: h for s, h in self.risk.stop_highs.items() if s in held})
+        b.set_meta("last_bar", seen)
         final_equity = b.mark(as_of, prices)
         summary = {"ts": now, "as_of": as_of, "mode": mode, "orders": results,
                    "equity": round(final_equity, 2), "cash": round(b.cash, 2), "killed": self.risk.killed}

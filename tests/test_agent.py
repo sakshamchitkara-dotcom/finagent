@@ -99,3 +99,13 @@ def test_trailing_stop_high_survives_restart_and_fires(tmp_path):
     assert [(o[0], o[1], o[3]) for o in s["orders"]] == [("SYN_TECH", "sell", 10)]
     assert PaperBroker(db).rows("fills")[-1]["reason"].startswith("trailing stop")
     assert PaperBroker(db).get_meta("stop_highs") == {}
+
+
+def test_repeated_tick_on_the_same_bar_is_a_no_op(tmp_path):
+    db = tmp_path / "r.db"
+    first = Agent(CSVProvider(), PaperBroker(db), SYMS, get_strategy("mean_reversion"), log=lambda _: None).tick()
+    fills = len(PaperBroker(db).rows("fills"))
+    again = Agent(CSVProvider(), PaperBroker(db), SYMS, get_strategy("mean_reversion"), log=lambda _: None).tick()
+    assert again["mode"] == "no new bar" and again["orders"] == [] and again["equity"] == first["equity"]
+    b = PaperBroker(db)
+    assert len(b.rows("fills")) == fills and b.rows("journal")[-1]["outcome"] == "no new bar"
