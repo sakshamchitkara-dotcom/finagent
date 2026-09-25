@@ -1,6 +1,7 @@
 import pytest
 
-from finagent.backtest import compute_metrics, run_backtest
+from finagent.backtest import buy_and_hold, compute_metrics, relative_metrics, run_backtest
+from finagent.data import Bar
 from finagent.data import CSVProvider
 from finagent.report import render_html
 from finagent.risk import RiskConfig
@@ -58,3 +59,31 @@ def test_html_report_is_self_contained():
     page = render_html("t", r.equity, r.metrics, r.fills, r.journal)
     assert "<svg" in page and "Paper trading only" in page
     assert "http://" not in page and "https://" not in page
+
+
+def test_buy_and_hold_enters_at_first_open_and_carries_forward():
+    bars = [Bar("2024-01-02", 10, 11, 9, 11, 0), Bar("2024-01-04", 12, 13, 11, 12.5, 0)]
+    curve = buy_and_hold(bars, ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04"], 100.0)
+    assert curve == pytest.approx([100.0, 110.0, 110.0, 125.0])
+
+
+def test_relative_metrics_against_itself_and_a_leveraged_copy():
+    bench = [101.0, 99.0, 103.0, 102.0, 106.0]
+    same = relative_metrics(bench, bench, 100.0)
+    assert same["beta"] == pytest.approx(1) and same["correlation"] == pytest.approx(1)
+    assert same["alpha"] == pytest.approx(0) and same["excess_return"] == pytest.approx(0)
+    levered, v = [], 100.0
+    for r in [bench[0] / 100 - 1] + [bench[i] / bench[i - 1] - 1 for i in range(1, len(bench))]:
+        v *= 1 + 2 * r
+        levered.append(v)
+    assert relative_metrics(levered, bench, 100.0)["beta"] == pytest.approx(2)
+
+
+def test_backtest_reports_benchmark():
+    p = CSVProvider()
+    r = run_backtest(p, ["SYN_TECH"], get_strategy("momentum"), end="2020-12-31", benchmark="SYN_INDEX")
+    assert r.metrics["benchmark"] == "SYN_INDEX buy-and-hold"
+    assert {"benchmark_total_return", "excess_return", "beta", "alpha"} <= set(r.metrics)
+    assert [b["ts"] for b in r.benchmark] == [e["ts"] for e in r.equity]
+    missing = run_backtest(p, ["SYN_TECH"], get_strategy("momentum"), end="2020-06-30", benchmark="NOPE")
+    assert missing.benchmark is None and "unavailable" in missing.metrics["benchmark"]

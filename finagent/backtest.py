@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .broker import PaperBroker
-from .data import DataProvider
+from .data import Bar, DataProvider, DataUnavailable
 from .risk import RiskConfig, RiskEngine
 from .strategies import Strategy, features, rule_based_order
 
@@ -21,12 +21,51 @@ class BacktestResult:
     fills: list[dict]
     journal: list[dict]
     metrics: dict
+    benchmark: list[dict] | None = None  # {"ts", "equity"} buy-and-hold curve on the same dates
+
+
+def daily_returns(values: list[float]) -> list[float]:
+    return [values[i] / values[i - 1] - 1 for i in range(1, len(values)) if values[i - 1] > 0]
+
+
+def buy_and_hold(bars: list[Bar], dates: list[str], cash: float) -> list[float]:
+    """Equity of `cash` put into one symbol at its first open on/after dates[0], marked at each close.
+
+    Days the benchmark did not trade carry the previous close forward.
+    """
+    by, entry, last, out = {b.date: b for b in bars}, None, None, []
+    for d in dates:
+        b = by.get(d)
+        if b is not None:
+            entry = entry or b.open
+            last = b.close
+        out.append(cash * last / entry if entry else cash)
+    return out
+
+
+def relative_metrics(strategy: list[float], bench: list[float], starting_cash: float) -> dict:
+    """Beta, correlation, annualized alpha and excess return of a strategy curve vs a benchmark curve."""
+    s = daily_returns([starting_cash] + strategy)
+    b = daily_returns([starting_cash] + bench)
+    n = min(len(s), len(b))
+    s, b = s[:n], b[:n]
+    ms, mb = (sum(s) / n, sum(b) / n) if n else (0.0, 0.0)
+    cov = sum((x - ms) * (y - mb) for x, y in zip(s, b)) / (n - 1) if n > 1 else 0.0
+    vs = sum((x - ms) ** 2 for x in s) / (n - 1) if n > 1 else 0.0
+    vb = sum((y - mb) ** 2 for y in b) / (n - 1) if n > 1 else 0.0
+    beta = cov / vb if vb > 0 else 0.0
+    return {
+        "excess_return": strategy[-1] / starting_cash - bench[-1] / starting_cash,
+        "beta": beta,
+        "correlation": cov / math.sqrt(vs * vb) if vs > 0 and vb > 0 else 0.0,
+        "alpha": (ms - beta * mb) * TRADING_DAYS,  # annualized, simple (no risk-free rate)
+    }
 
 
 def compute_metrics(equity: list[float], fills: list[dict], starting_cash: float) -> dict:
     """Performance metrics from a daily equity series (starting value = starting_cash) and fill records."""
     series = [starting_cash] + list(equity)
-    rets = [series[i] / series[i - 1] - 1 for i in range(1, len(series)) if series[i - 1] > 0]
+    rets = daily_returns(series)
     n = len(rets)
     years = n / TRADING_DAYS if n else 0.0
     total = series[-1] / starting_cash - 1
@@ -59,7 +98,8 @@ def compute_metrics(equity: list[float], fills: list[dict], starting_cash: float
 
 def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
                  risk_config: RiskConfig | None = None, cash: float = 100_000.0,
-                 start: str | None = None, end: str | None = None, **broker_kwargs) -> BacktestResult:
+                 start: str | None = None, end: str | None = None, benchmark: str | None = None,
+                 **broker_kwargs) -> BacktestResult:
     history = {s: provider.history(s) for s in symbols}
     common = set.intersection(*(set(b.date for b in bars) for bars in history.values()))
     # Warm-up bars before `start` are kept so indicators are ready on day one.
@@ -109,7 +149,22 @@ def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
     metrics["period"] = f"{dates[first]} .. {dates[-1]}"
     p0 = {s: bars[s][first].open for s in symbols}
     metrics["buy_hold_return"] = sum(bars[s][-1].close / p0[s] for s in symbols) / len(symbols) - 1
-    return BacktestResult(eq, fills, broker.rows("journal"), metrics)
+    bench_rows = None
+    if benchmark:
+        try:
+            bench_bars = history.get(benchmark) or provider.history(benchmark)
+        except DataUnavailable as e:
+            metrics["benchmark"] = f"{benchmark} unavailable: {e}"
+        else:
+            days = [r["ts"] for r in eq]
+            curve = buy_and_hold(bench_bars, days, cash)
+            bm = compute_metrics(curve, [], cash)
+            metrics["benchmark"] = f"{benchmark} buy-and-hold"
+            for k in ("total_return", "cagr", "sharpe", "max_drawdown"):
+                metrics[f"benchmark_{k}"] = bm[k]
+            metrics.update(relative_metrics([r["equity"] for r in eq], curve, cash))
+            bench_rows = [{"ts": d, "equity": v} for d, v in zip(days, curve)]
+    return BacktestResult(eq, fills, broker.rows("journal"), metrics, bench_rows)
 
 
 def write_csv(rows: list[dict], path: Path) -> None:

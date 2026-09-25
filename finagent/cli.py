@@ -13,7 +13,7 @@ from .backtest import compute_metrics, run_backtest, write_csv
 from .broker import PaperBroker
 from .data import (SAMPLE_DIR, CachedProvider, CSVProvider, DataUnavailable, FallbackProvider, StooqProvider,
                    YahooProvider)
-from .report import write_report
+from .report import PCT, write_report
 from .risk import RiskConfig, RiskEngine
 from .strategies import STRATEGIES, get_strategy
 
@@ -48,11 +48,22 @@ def _symbols(args) -> list[str]:
     return syms
 
 
+def _benchmark(args) -> str | None:
+    """auto = SPY for live providers, SYN_INDEX for the bundled sample data, else none."""
+    if args.benchmark.lower() == "none":
+        return None
+    if args.benchmark.lower() != "auto":
+        return args.benchmark.upper()
+    if args.provider != "csv":
+        return "SPY"
+    return "SYN_INDEX" if (Path(args.data) / "SYN_INDEX.csv").exists() else None
+
+
 def _print_metrics(m: dict) -> None:
     for k, v in m.items():
         if isinstance(v, float):
-            v = f"{v:.2%}" if k in {"total_return", "cagr", "max_drawdown", "win_rate", "buy_hold_return"} else f"{v:,.2f}"
-        print(f"  {k:<16} {v}")
+            v = f"{v:.2%}" if k in PCT else f"{v:,.2f}"
+        print(f"  {k:<24} {v}")
 
 
 def _data_note(args) -> str:
@@ -66,7 +77,7 @@ def cmd_backtest(args) -> int:
     symbols = _symbols(args)
     try:
         res = run_backtest(provider, symbols, get_strategy(args.strategy), RiskConfig(sizing=args.sizing),
-                           cash=args.cash, start=args.start, end=args.end)
+                           cash=args.cash, start=args.start, end=args.end, benchmark=_benchmark(args))
     except DataUnavailable as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -163,6 +174,8 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--start")
     bt.add_argument("--end")
     bt.add_argument("--out", default="reports/backtest")
+    bt.add_argument("--benchmark", default="auto",
+                    help="buy-and-hold benchmark symbol; auto = SPY (live) / SYN_INDEX (sample); none disables")
     bt.set_defaults(fn=cmd_backtest)
 
     run = sub.add_parser("run", parents=[common], help="run the autonomous paper-trading loop")
