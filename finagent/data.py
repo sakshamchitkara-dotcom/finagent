@@ -138,8 +138,25 @@ class StooqProvider:
         return bars
 
 
-def parse_yahoo_chart(text: str, symbol: str, adjust: bool = True) -> list[Bar]:
-    """Parse Yahoo's v8 chart JSON. With `adjust`, OHLC are scaled by adjclose/close (dividends + splits)."""
+def yahoo_partial_day(meta: dict, stamps: list[int]) -> bool:
+    """True when the last bar belongs to a regular session that has not closed yet (an in-progress bar).
+
+    Uses Yahoo's own clock: the bar started inside `currentTradingPeriod.regular` and the last trade
+    (`regularMarketTime`) is before that session's end. No local wall clock involved.
+    """
+    try:
+        reg = meta["currentTradingPeriod"]["regular"]
+        return bool(stamps) and stamps[-1] >= reg["start"] and meta["regularMarketTime"] < reg["end"]
+    except (KeyError, TypeError):
+        return False
+
+
+def parse_yahoo_chart(text: str, symbol: str, adjust: bool = True, include_partial: bool = True) -> list[Bar]:
+    """Parse Yahoo's v8 chart JSON. With `adjust`, OHLC are scaled by adjclose/close (dividends + splits).
+
+    With `include_partial=False`, today's bar is dropped while its session is still trading, so its
+    "close" (really the latest trade) is never treated as a daily close.
+    """
     try:
         chart = json.loads(text).get("chart") or {}
     except (ValueError, AttributeError) as e:
@@ -153,6 +170,8 @@ def parse_yahoo_chart(text: str, symbol: str, adjust: bool = True) -> list[Bar]:
         q = res["indicators"]["quote"][0]
         adj = (res["indicators"].get("adjclose") or [{}])[0].get("adjclose")
         offset = int(res.get("meta", {}).get("gmtoffset") or 0)
+        if not include_partial and yahoo_partial_day(res.get("meta") or {}, stamps):
+            stamps = stamps[:-1]
     except (KeyError, IndexError, TypeError) as e:
         raise DataUnavailable(f"yahoo {symbol}: unexpected chart JSON layout") from e
     by_date: dict[str, Bar] = {}
@@ -173,12 +192,13 @@ class YahooProvider:
 
     URL = "https://query2.finance.yahoo.com/v8/finance/chart/{sym}?range={range}&interval=1d&events=div%2Csplit"
 
-    def __init__(self, range: str = "10y", adjust: bool = True, timeout: float = 15.0):
-        self.range, self.adjust, self.timeout = range, adjust, timeout
+    def __init__(self, range: str = "10y", adjust: bool = True, timeout: float = 15.0, include_partial: bool = False):
+        self.range, self.adjust, self.timeout, self.include_partial = range, adjust, timeout, include_partial
 
     def history(self, symbol: str) -> list[Bar]:
         url = self.URL.format(sym=urllib.parse.quote(symbol.upper()), range=self.range)
-        return parse_yahoo_chart(http_get(url, f"yahoo {symbol}", self.timeout), symbol, self.adjust)
+        return parse_yahoo_chart(http_get(url, f"yahoo {symbol}", self.timeout), symbol, self.adjust,
+                                 self.include_partial)
 
 
 class CachedProvider:

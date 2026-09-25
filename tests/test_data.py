@@ -155,3 +155,26 @@ def test_fallback_reports_both_failures():
     fb = FallbackProvider(_Counting(fail=True), CSVProvider())
     with pytest.raises(DataUnavailable, match="primary failed.*fallback failed"):
         fb.history("SPY")
+
+
+def _live_chart(regular_market_time):
+    # session 2024-01-04 09:30-16:00 ET; the last bar belongs to it
+    meta = {"gmtoffset": -18000, "regularMarketTime": regular_market_time,
+            "currentTradingPeriod": {"regular": {"start": 1704378600, "end": 1704402000}}}
+    return _chart(meta=meta)
+
+
+def test_yahoo_drops_in_progress_bar_only_while_session_is_open():
+    trading = _live_chart(1704390000)  # 12:40 ET, session still open
+    assert [b.date for b in parse_yahoo_chart(trading, "X", include_partial=False)] == ["2024-01-02"]
+    assert parse_yahoo_chart(trading, "X")[-1].date == "2024-01-04"  # explicitly kept
+    closed = _live_chart(1704402000)  # regularMarketTime == session end: the bar is final
+    assert parse_yahoo_chart(closed, "X", include_partial=False)[-1].date == "2024-01-04"
+    assert parse_yahoo_chart(_chart(), "X", include_partial=False)[-1].date == "2024-01-04"  # no meta: keep
+
+
+def test_yahoo_provider_drops_partial_by_default(monkeypatch):
+    monkeypatch.setattr(data.urllib.request, "urlopen",
+                        lambda req, timeout: _Resp(_live_chart(1704390000).encode(), "application/json"))
+    assert YahooProvider().history("SPY")[-1].date == "2024-01-02"
+    assert YahooProvider(include_partial=True).history("SPY")[-1].date == "2024-01-04"
