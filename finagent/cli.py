@@ -41,7 +41,8 @@ def _provider(args):
 
 
 def _risk_config(args) -> RiskConfig:
-    cfg = RiskConfig(sizing=args.sizing, trailing_stop=args.trailing_stop, max_sector_pct=args.max_sector_pct)
+    cfg = RiskConfig(sizing=args.sizing, trailing_stop=args.trailing_stop, stop_loss=args.stop_loss,
+                     take_profit=args.take_profit, max_sector_pct=args.max_sector_pct)
     if args.sectors:
         try:
             extra = json.loads(Path(args.sectors).read_text())
@@ -277,6 +278,10 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("--cash", type=float, default=100_000.0)
     common.add_argument("--trailing-stop", type=float, default=0.0, metavar="FRACTION",
                         help="exit a long after it falls this fraction from its highest close (e.g. 0.1); 0 = off")
+    common.add_argument("--stop-loss", type=float, default=0.0, metavar="FRACTION",
+                        help="exit a long once it closes this fraction below its average entry (e.g. 0.08); 0 = off")
+    common.add_argument("--take-profit", type=float, default=0.0, metavar="FRACTION",
+                        help="exit a long once it closes this fraction above its average entry (e.g. 0.25); 0 = off")
     common.add_argument("--max-sector-pct", type=float, default=RiskConfig.max_sector_pct, metavar="FRACTION",
                         help="cap on total long exposure per sector (default %(default)s)")
     common.add_argument("--sectors", metavar="JSON", help='JSON file {"SYMBOL": "sector"} extending the built-in map')

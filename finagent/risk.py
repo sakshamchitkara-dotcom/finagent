@@ -42,6 +42,7 @@ class PortfolioState:
     peak_equity: float
     day_start_equity: float
     returns: dict[str, list[float]] = field(default_factory=dict)  # recent daily returns, for correlation checks
+    costs: dict[str, float] = field(default_factory=dict)  # average entry price per position (stop-loss/target)
 
     @property
     def gross_exposure(self) -> float:
@@ -64,6 +65,8 @@ class RiskConfig:
     daily_loss_limit: float = 0.03    # stop opening risk after a 3% down day
     cost_buffer: float = 0.005        # headroom for slippage + commission when checking cash
     trailing_stop: float = 0.0        # exit a long after it falls this fraction from its high close; 0 = off
+    stop_loss: float = 0.0            # exit a long once its close is this fraction below average entry; 0 = off
+    take_profit: float = 0.0          # exit a long once its close is this fraction above average entry; 0 = off
     max_sector_pct: float = 0.40      # total long exposure per sector, fraction of equity
     max_correlated_pct: float = 0.40  # order symbol + held names correlated >= threshold, fraction of equity
     correlation_threshold: float = 0.70
@@ -123,26 +126,34 @@ class RiskEngine:
         """Once halted, the policy is to flatten everything."""
         return [Order(s, "sell", q, "kill switch: flatten position", "risk") for s, q in state.positions.items() if q > 0]
 
-    def trailing_stop_orders(self, state: PortfolioState) -> list[Order]:
-        """Ratchet each long's high-water close and return full exits for positions that fell `trailing_stop` from it.
+    def exit_orders(self, state: PortfolioState) -> list[Order]:
+        """Protective exits for open longs, evaluated at the close: stop-loss and take-profit against the average
+        entry price (`state.costs`), then the trailing stop against the highest close since entry.
 
-        Call once per bar at the close. Highs of positions that are no longer held are forgotten.
+        Call once per bar. Ratchets the trailing-stop high-water marks and forgets those of positions no longer held.
+        At most one full exit per symbol.
         """
         # ponytail: tracks closes, not intraday highs/lows; an intraday stop model needs bar high/low per tick.
+        c = self.config
         held = {s: q for s, q in state.positions.items() if q > 0}
         self.stop_highs = {s: h for s, h in self.stop_highs.items() if s in held}
-        pct = self.config.trailing_stop
-        if pct <= 0:
-            return []
         out = []
         for s, q in held.items():
-            px = state.prices.get(s)
+            px, cost = state.prices.get(s), state.costs.get(s)
             if px is None:
                 continue
-            hi = self.stop_highs[s] = max(self.stop_highs.get(s, px), px)
-            if px <= hi * (1 - pct):
-                out.append(Order(s, "sell", q, f"trailing stop: close {px:.2f} is {1 - px / hi:.1%} below "
-                                               f"high {hi:.2f} (limit {pct:.0%})", "risk"))
+            why = None
+            if cost and c.stop_loss > 0 and px <= cost * (1 - c.stop_loss):
+                why = f"stop loss: close {px:.2f} is {1 - px / cost:.1%} below entry {cost:.2f} (limit {c.stop_loss:.0%})"
+            elif cost and c.take_profit > 0 and px >= cost * (1 + c.take_profit):
+                why = f"take profit: close {px:.2f} is {px / cost - 1:.1%} above entry {cost:.2f} (target {c.take_profit:.0%})"
+            if c.trailing_stop > 0:
+                hi = self.stop_highs[s] = max(self.stop_highs.get(s, px), px)
+                if why is None and px <= hi * (1 - c.trailing_stop):
+                    why = (f"trailing stop: close {px:.2f} is {1 - px / hi:.1%} below high {hi:.2f} "
+                           f"(limit {c.trailing_stop:.0%})")
+            if why:
+                out.append(Order(s, "sell", q, why, "risk"))
         return out
 
     def check(self, order: Order, state: PortfolioState) -> RiskDecision:
