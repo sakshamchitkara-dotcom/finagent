@@ -172,3 +172,17 @@ def test_backtest_honours_stop_loss_and_take_profit():
                      end="2021-12-31")
     reasons = {f["reason"].split(":")[0] for f in r.fills if f["source"] == "risk"}
     assert {"stop loss", "take profit"} <= reasons
+
+
+def test_trailing_stop_can_ratchet_on_intraday_highs():
+    by_close, by_high = RiskEngine(RiskConfig(trailing_stop=0.10)), RiskEngine(RiskConfig(trailing_stop=0.10,
+                                                                                         stop_basis="high"))
+    s = state(positions={"A": 10}, prices={"A": 110.0})
+    s.highs = {"A": 115.0}  # spiked intraday, closed at 110
+    assert by_close.exit_orders(s) == [] and by_high.exit_orders(s) == []
+    assert by_close.stop_highs == {"A": 110.0} and by_high.stop_highs == {"A": 115.0}
+    s.prices, s.highs = {"A": 103.0}, {"A": 104.0}  # 10.4% below the intraday high, 6.4% below the best close
+    assert by_close.exit_orders(s) == []
+    [o] = by_high.exit_orders(s)
+    assert "below high 115.00" in o.reason
+    assert by_high.levels(s)[0]["trailing_stop"] == pytest.approx(103.5)

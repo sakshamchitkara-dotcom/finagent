@@ -235,6 +235,7 @@ def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
         # 2) decide at the close for tomorrow
         if i + 1 < len(dates):
             state = broker.begin_day(day, closes)
+            state.highs = {s: bars[s][i].high for s in symbols}
             if risk.update(state):
                 pending = risk.liquidation_orders(state)
                 continue

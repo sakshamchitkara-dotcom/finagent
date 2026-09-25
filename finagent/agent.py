@@ -44,6 +44,7 @@ class Agent:
         # observe
         feats: dict[str, dict] = {}
         rets: dict[str, list[float]] = {}
+        highs: dict[str, float] = {}
         lb = self.risk.config.correlation_lookback
         for s in self.symbols:
             try:
@@ -51,6 +52,7 @@ class Agent:
                 closes = [bar.close for bar in hist[-lb - 1:]]
                 rets[s] = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes)) if closes[i - 1] > 0]
                 f = features(hist)
+                highs[s] = hist[-1].high if hist else 0.0
             except DataUnavailable as e:
                 b.journal(now, s, "observe", "skip", 0, None, str(e), "no data")
                 continue
@@ -80,6 +82,7 @@ class Agent:
         # analyze
         signals = {s: self.strategy.signal(f) for s, f in feats.items()}
         state = b.begin_day(as_of, prices)
+        state.highs = highs
         equity = state.equity
 
         # decide
