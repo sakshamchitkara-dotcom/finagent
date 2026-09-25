@@ -11,7 +11,7 @@ from pathlib import Path
 from .broker import PaperBroker
 from .data import Bar, DataProvider, DataUnavailable
 from .risk import RiskConfig, RiskEngine
-from .strategies import Strategy, features, rule_based_order
+from .strategies import LOOKBACK, Strategy, features, rule_based_order
 
 TRADING_DAYS = 252
 
@@ -206,7 +206,7 @@ def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
             for s in symbols:
                 if s in stopped:
                     continue
-                f = features(bars[s][:i + 1])
+                f = features(bars[s][max(0, i + 1 - LOOKBACK):i + 1])
                 if f is None:
                     continue
                 order = rule_based_order(s, strategy.signal(f), strategy, held.get(s, 0), equity, risk)
