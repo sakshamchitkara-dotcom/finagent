@@ -200,7 +200,11 @@ def monte_carlo(trips: list[dict], starting_cash: float, runs: int = 1000, seed:
 def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
                  risk_config: RiskConfig | None = None, cash: float = 100_000.0,
                  start: str | None = None, end: str | None = None, benchmark: str | None = None,
-                 **broker_kwargs) -> BacktestResult:
+                 feature_cache: dict | None = None, **broker_kwargs) -> BacktestResult:
+    """`feature_cache` ({(symbol, date): features}) lets repeated backtests of the SAME symbols and data (a sweep,
+    walk-forward folds) reuse indicator snapshots: they depend only on the bars up to that date, not on `start`,
+    `end`, the strategy thresholds or the risk settings. Never share one across different symbol lists."""
+    cache = {} if feature_cache is None else feature_cache
     history = {s: provider.history(s) for s in symbols}
     common = set.intersection(*(set(b.date for b in bars) for bars in history.values()))
     # Warm-up bars before `start` are kept so indicators are ready on day one.
@@ -253,7 +257,10 @@ def run_backtest(provider: DataProvider, symbols: list[str], strategy: Strategy,
             for s in symbols:
                 if s in stopped:
                     continue
-                f = features(bars[s][max(0, i + 1 - LOOKBACK):i + 1])
+                key = (s, day)
+                if key not in cache:
+                    cache[key] = features(bars[s][max(0, i + 1 - LOOKBACK):i + 1])
+                f = cache[key]
                 if f is None:
                     continue
                 order = rule_based_order(s, strategy.signal(f), strategy, held.get(s, 0), equity, risk)

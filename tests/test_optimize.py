@@ -72,3 +72,16 @@ def test_ranks_average_ties():
     # all-tied IS Sharpes (nothing traded) carry no ranking information: correlation 0, not an artefact
     rows = [{"is_sharpe": 0.0, "oos_sharpe": s} for s in (0.3, 0.2, 0.1)]
     assert optimize.overfit_check(rows)["is_oos_rank_correlation"] == 0.0
+
+
+def test_shared_feature_cache_gives_identical_backtests():
+    from finagent.backtest import run_backtest
+    from finagent.data import CSVProvider
+    from finagent.strategies import get_strategy
+
+    p, syms, cache = CSVProvider(), ["SYN_TECH", "SYN_UTIL"], {}
+    for start, end in [("2020-01-01", "2021-06-30"), ("2019-06-01", "2020-12-31"), ("2021-01-01", None)]:
+        fresh = run_backtest(p, syms, get_strategy("combined"), start=start, end=end)
+        cached = run_backtest(p, syms, get_strategy("combined"), start=start, end=end, feature_cache=cache)
+        assert cached.metrics == fresh.metrics and cached.fills == fresh.fills
+    assert cache and all(s in syms for s, _ in cache)
