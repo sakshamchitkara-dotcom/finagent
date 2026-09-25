@@ -88,7 +88,7 @@ def cmd_backtest(args) -> int:
     write_csv(res.journal, out / "journal.csv")
     write_csv(round_trips(res.fills), out / "round_trips.csv")
     report = write_report(out / "report.html", f"Backtest: {args.strategy} on {', '.join(symbols)}",
-                          res.equity, res.metrics, res.fills, note=_data_note(args))
+                          res.equity, res.metrics, res.fills, note=_data_note(args), benchmark=res.benchmark)
     print(f"Backtest {args.strategy} | {', '.join(symbols)}")
     _print_metrics(res.metrics)
     print(f"wrote {out}/{{equity,trades,round_trips,journal}}.csv and {report}")
