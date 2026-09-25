@@ -49,3 +49,39 @@ def test_positions_without_data_are_flagged_as_marked_at_cost(tmp_path, capsys):
     PaperBroker(db).execute(RiskDecision(Order("GONE", "buy", 3), True, 3), 10.0, "d1")
     assert main(["portfolio", "--db", str(db)]) == 0
     assert "GONE" in (out := capsys.readouterr().out) and "NO PRICE: marked at cost" in out
+
+
+def test_cli_sweep_and_walkforward_write_tables(tmp_path, capsys):
+    sw, wf = tmp_path / "sweep.csv", tmp_path / "wf.csv"
+    assert main(["sweep", "--symbols", "SYN_TECH", "--grid", "entry=0.3,0.4", "--grid", "stop_loss=0,0.1",
+                 "--end", "2021-12-31", "--out", str(sw)]) == 0
+    out = capsys.readouterr().out
+    assert "4 combinations" in out and "in-sample best: IS Sharpe" in out
+    assert sw.read_text().splitlines()[0].startswith("entry,stop_loss,split,is_sharpe")
+    assert len(sw.read_text().splitlines()) == 5
+    assert main(["walkforward", "--symbols", "SYN_TECH", "--grid", "entry=0.3,0.4", "--train-days", "252",
+                 "--test-days", "252", "--out", str(wf)]) == 0
+    out = capsys.readouterr().out
+    assert "stitched out-of-sample result" in out and "benchmark_total_return" in out  # auto -> SYN_INDEX
+    assert len(wf.read_text().splitlines()) == 1 + int(out.split("folds")[1].split()[0])
+
+
+def test_cli_rejects_bad_grid_and_sector_files(tmp_path):
+    with pytest.raises(SystemExit, match="unknown parameter"):
+        main(["sweep", "--grid", "nope=1"])
+    bad = tmp_path / "sectors.json"
+    bad.write_text('["AAPL"]')
+    with pytest.raises(SystemExit, match="JSON object"):
+        main(["backtest", "--sectors", str(bad)])
+    with pytest.raises(SystemExit, match="cannot read"):
+        main(["backtest", "--sectors", str(tmp_path / "missing.json")])
+
+
+def test_cli_benchmark_none_and_custom_sectors(tmp_path, capsys):
+    sectors = tmp_path / "sectors.json"
+    sectors.write_text('{"syn_tech": "tech", "SYN_UTIL": "tech"}')
+    assert main(["backtest", "--symbols", "SYN_TECH", "SYN_UTIL", "--end", "2020-12-31", "--benchmark", "none",
+                 "--sectors", str(sectors), "--max-sector-pct", "0.2", "--out", str(tmp_path / "bt")]) == 0
+    assert "benchmark_total_return" not in (out := capsys.readouterr().out) and "beta" not in out
+    journal = (tmp_path / "bt" / "journal.csv").read_text()
+    assert "sector 'tech' exposure" in journal  # the lowercase key was normalised and the 20% cap bit
