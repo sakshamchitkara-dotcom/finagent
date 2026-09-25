@@ -11,7 +11,8 @@ from . import llm
 from .agent import Agent
 from .backtest import compute_metrics, run_backtest, write_csv
 from .broker import PaperBroker
-from .data import SAMPLE_DIR, CSVProvider, DataUnavailable, FallbackProvider, StooqProvider
+from .data import (SAMPLE_DIR, CachedProvider, CSVProvider, DataUnavailable, FallbackProvider, StooqProvider,
+                   YahooProvider)
 from .report import write_report
 from .risk import RiskConfig, RiskEngine
 from .strategies import STRATEGIES, get_strategy
@@ -20,16 +21,27 @@ DISCLAIMER = "PAPER TRADING ONLY. Not financial advice. finagent never places re
 DEFAULT_DB = "state/finagent.db"
 
 
+LIVE = {"yahoo": YahooProvider, "stooq": StooqProvider}
+
+
 def _provider(args):
+    """csv = --data directory; yahoo/stooq = live, disk-cached, falling back to --data CSVs if a fetch fails."""
     csv = CSVProvider(args.data)
-    if getattr(args, "provider", "csv") == "stooq":
-        return FallbackProvider(StooqProvider(), csv)
-    return csv
+    if args.provider == "csv":
+        return csv
+    return FallbackProvider(CachedProvider(LIVE[args.provider](), args.cache_dir, args.cache_hours), csv)
+
+
+def _print_sources(provider) -> None:
+    for s, src in getattr(provider, "served_by", {}).items():
+        print(f"data {s}: {src}")
 
 
 def _symbols(args) -> list[str]:
     if args.symbols:
         return [s.upper() for s in args.symbols]
+    if args.provider != "csv":
+        sys.exit(f"--provider {args.provider} needs --symbols (e.g. --symbols SPY AAPL MSFT)")
     syms = CSVProvider(args.data).symbols()
     if not syms:
         sys.exit(f"no CSV files in {args.data}; pass --symbols")
@@ -43,18 +55,28 @@ def _print_metrics(m: dict) -> None:
         print(f"  {k:<16} {v}")
 
 
+def _data_note(args) -> str:
+    if args.provider != "csv":
+        return f"Data: {args.provider} (live, cached in {args.cache_dir})."
+    return f"Data: {args.data}" + (" (SYNTHETIC sample data)." if Path(args.data).resolve() == SAMPLE_DIR else ".")
+
+
 def cmd_backtest(args) -> int:
     provider = _provider(args)
     symbols = _symbols(args)
-    res = run_backtest(provider, symbols, get_strategy(args.strategy), RiskConfig(sizing=args.sizing),
-                       cash=args.cash, start=args.start, end=args.end)
+    try:
+        res = run_backtest(provider, symbols, get_strategy(args.strategy), RiskConfig(sizing=args.sizing),
+                           cash=args.cash, start=args.start, end=args.end)
+    except DataUnavailable as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    _print_sources(provider)
     out = Path(args.out)
     write_csv(res.equity, out / "equity.csv")
     write_csv(res.fills, out / "trades.csv")
     write_csv(res.journal, out / "journal.csv")
     report = write_report(out / "report.html", f"Backtest: {args.strategy} on {', '.join(symbols)}",
-                          res.equity, res.metrics, res.fills, note="Backtest on " + str(args.data)
-                          + (" (SYNTHETIC sample data)" if Path(args.data).resolve() == SAMPLE_DIR else ""))
+                          res.equity, res.metrics, res.fills, note=_data_note(args))
     print(f"Backtest {args.strategy} | {', '.join(symbols)}")
     _print_metrics(res.metrics)
     print(f"wrote {out / 'equity.csv'}, {out / 'trades.csv'}, {out / 'journal.csv'}, {report}")
@@ -83,19 +105,17 @@ def cmd_run(args) -> int:
         return 2
     except KeyboardInterrupt:
         pass
-    if isinstance(provider, FallbackProvider):
-        for s, src in provider.served_by.items():
-            print(f"data {s}: {src}")
+    _print_sources(provider)
     return 0
 
 
 def cmd_portfolio(args) -> int:
     b = PaperBroker(args.db)
     positions = b.positions()
-    prices = {}
+    provider, prices = _provider(args), {}
     for s in positions:
         try:
-            prices[s] = CSVProvider(args.data).history(s)[-1].close
+            prices[s] = provider.history(s)[-1].close
         except DataUnavailable:
             prices[s] = positions[s][1]  # fall back to cost
     eq = b.equity(prices)
@@ -122,8 +142,15 @@ def cmd_report(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--data", default=str(SAMPLE_DIR), help="directory of <SYMBOL>.csv files")
+    data = argparse.ArgumentParser(add_help=False)
+    data.add_argument("--provider", choices=["csv", *LIVE], default="csv",
+                      help="csv = --data directory (default); yahoo/stooq = live daily bars, disk-cached, "
+                           "falling back to --data CSVs when unavailable")
+    data.add_argument("--data", default=str(SAMPLE_DIR), help="directory of <SYMBOL>.csv files")
+    data.add_argument("--cache-dir", default="data/cache", help="where live bars are cached")
+    data.add_argument("--cache-hours", type=float, default=12.0, help="refetch cached bars older than this")
+
+    common = argparse.ArgumentParser(add_help=False, parents=[data])
     common.add_argument("--symbols", nargs="+", help="default: every CSV in --data")
     common.add_argument("--strategy", default="combined", choices=sorted(STRATEGIES))
     common.add_argument("--sizing", default="atr", choices=["atr", "fixed"])
@@ -142,15 +169,12 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--once", action="store_true", help="single tick, then exit")
     run.add_argument("--interval", type=float, default=86_400, help="seconds between ticks")
     run.add_argument("--db", default=DEFAULT_DB)
-    run.add_argument("--provider", choices=["csv", "stooq"], default="csv",
-                     help="stooq = live daily data, falls back to --data CSVs when unavailable")
     run.add_argument("--no-llm", action="store_true", help="force the rule-based policy")
     run.add_argument("--model", default=llm.MODEL)
     run.set_defaults(fn=cmd_run)
 
-    pf = sub.add_parser("portfolio", help="show the paper portfolio")
+    pf = sub.add_parser("portfolio", parents=[data], help="show the paper portfolio")
     pf.add_argument("--db", default=DEFAULT_DB)
-    pf.add_argument("--data", default=str(SAMPLE_DIR))
     pf.set_defaults(fn=cmd_portfolio)
 
     rp = sub.add_parser("report", help="HTML report of the paper account")
