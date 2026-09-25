@@ -50,3 +50,18 @@ def test_overfit_check_flags_degradation_and_rank_inversion():
     fine = optimize.overfit_check([{"is_sharpe": 1.0, "oos_sharpe": 0.9}, {"is_sharpe": 0.5, "oos_sharpe": 0.4},
                                    {"is_sharpe": 0.1, "oos_sharpe": 0.0}])
     assert fine["warnings"] == []
+
+
+def test_walk_forward_folds_never_overlap_their_training_window():
+    folds, summary = optimize.walk_forward(CSVProvider(), ["SYN_TECH", "SYN_UTIL"], "momentum",
+                                           {"entry": [0.2, 0.4]}, train_days=252, test_days=252,
+                                           benchmark="SYN_INDEX")
+    assert summary["folds"] == len(folds) >= 3
+    for f in folds:
+        assert f["train"].split("..")[1] < f["test"].split("..")[0]
+        assert f["entry"] in (0.2, 0.4)
+    for a, b in zip(folds, folds[1:]):
+        assert a["test"].split("..")[1] < b["test"].split("..")[0]
+    assert summary["oos_period"].startswith(folds[0]["test"][:10]) and summary["benchmark"] == "SYN_INDEX"
+    with pytest.raises(ValueError, match="walk-forward fold"):
+        optimize.walk_forward(CSVProvider(), ["SYN_TECH"], "momentum", {}, train_days=2000)
