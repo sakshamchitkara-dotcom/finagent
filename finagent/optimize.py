@@ -68,11 +68,17 @@ def _pick(prefix: str, metrics: dict) -> dict:
 
 
 def _ranks(values: list[float]) -> list[float]:
-    # ponytail: ties get arbitrary adjacent ranks rather than averaged ranks; fine for a diagnostic.
+    """Ranks with ties averaged (Spearman convention): many grid rows share Sharpe 0.0 when they never trade."""
     order = sorted(range(len(values)), key=lambda i: values[i])
     ranks = [0.0] * len(values)
-    for r, i in enumerate(order):
-        ranks[i] = float(r)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        for k in range(i, j + 1):
+            ranks[order[k]] = (i + j) / 2
+        i = j + 1
     return ranks
 
 
