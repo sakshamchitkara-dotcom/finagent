@@ -30,9 +30,14 @@ jobs:
         run: |
           finagent backtest --trailing-stop 0.1 --out reports/ci
           test -s reports/ci/round_trips.csv
+          finagent backtest --strategy breakout --stop-loss 0.08 --take-profit 0.3 --trailing-stop 0.1 \
+            --stop-basis high --monte-carlo 500 --out reports/ci/breakout | tee reports/ci/breakout.txt
+          grep -q "mc_return_p50" reports/ci/breakout.txt
+          grep -q "Open positions and exit levels" reports/ci/breakout/report.html
           finagent sweep --symbols SYN_TECH SYN_UTIL --grid entry=0.3,0.4 --out reports/ci/sweep.csv
           finagent walkforward --symbols SYN_TECH --grid entry=0.3,0.4 --train-days 252 --test-days 252 \
             --out reports/ci/walkforward.csv
-          finagent run --once --db state/ci.db --trailing-stop 0.1
+          finagent run --once --db state/ci.db --trailing-stop 0.1 --stop-loss 0.08
+          finagent run --once --db state/ci.db --trailing-stop 0.1 --stop-loss 0.08 | grep -q "mode=no new bar"
           finagent portfolio --db state/ci.db
           finagent report --db state/ci.db --out reports/ci/paper.html
