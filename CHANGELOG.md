@@ -2,6 +2,19 @@
 
 All notable changes to finagent. Paper trading only: no release adds real order placement.
 
+## [0.3.1] - 2026-09-25
+
+### Fixed
+- `run`: positions held in names no longer listed in `--symbols` are still fetched and priced, so their exits keep
+  running; previously every tick failed with "no price for held position".
+- CLI: out-of-range fractions (`--stop-loss 2`, `--trailing-stop -0.1`), a zero `--cash` / `--interval`, a negative
+  `--monte-carlo` and non-ISO `--start` / `--end` / `--split` dates are rejected at parse time. A backtest window
+  with no data exits with code 2 and an error message instead of a traceback.
+
+### Performance
+- `features()` computes only the latest Bollinger band: sample backtests run about 2x faster (1.52s -> 0.72s) with
+  identical results.
+
 ## [0.3.0] - 2026-09-25
 
 ### Added
