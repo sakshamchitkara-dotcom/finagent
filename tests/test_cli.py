@@ -127,3 +127,22 @@ def test_run_warns_when_cash_is_ignored_for_an_existing_account(tmp_path, capsys
     assert main(["run", "--once", "--db", db, "--cash", "250000"]) == 0
     err = capsys.readouterr().err
     assert "--cash 250,000.00 ignored" in err and "started with 50,000.00" in err
+
+
+def test_compare_two_saved_backtests(tmp_path, capsys):
+    a, b = tmp_path / "a", tmp_path / "b"
+    common = ["backtest", "--symbols", "SYN_TECH", "SYN_BANK", "--end", "2021-12-31"]
+    assert main(common + ["--out", str(a)]) == 0
+    assert main(common + ["--regime-filter", "SYN_INDEX", "--out", str(b)]) == 0
+    capsys.readouterr()
+    assert main(["compare", str(a), str(b / "metrics.json")]) == 0
+    out = capsys.readouterr().out
+    assert "risk.regime_symbol" in out and "'' -> 'SYN_INDEX'" in out
+    assert " pp" in out and "total_return" in out and "strategy" not in out  # equal labels are hidden
+    assert main(["compare", str(a), str(a), "--all"]) == 0
+    assert "config: identical" in (out := capsys.readouterr().out) and "strategy" in out
+    (tmp_path / "bad.json").write_text("[]")
+    with pytest.raises(SystemExit, match="not a finagent backtest"):
+        main(["compare", str(a), str(tmp_path / "bad.json")])
+    with pytest.raises(SystemExit, match="cannot read"):
+        main(["compare", str(a), str(tmp_path / "missing")])
